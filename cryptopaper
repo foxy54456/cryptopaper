@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+API="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cryptopaper"
+OUTPUT="$CACHE_DIR/wallpaper-$(date +%s).png"
+
+get_price() {
+    local response
+    local price
+
+    response="$(curl -sS "$API")"
+    price="$(printf '%s' "$response" | jq -r '.bitcoin.usd // empty')"
+
+    if [[ -z "$price" ]]; then
+        echo "Could not get Bitcoin price."
+        echo "You may have hit the API rate limit. Try again later."
+        exit 1
+    fi
+
+    printf '%s\n' "$price"
+}
+
+show_price() {
+    local price
+
+    price="$(get_price)"
+    printf 'Bitcoin: $%s\n' "$price"
+}
+
+make_wallpaper() {
+    local price
+
+    price="$(get_price)"
+
+    mkdir -p "$CACHE_DIR"
+
+    magick \
+        -size 1920x1080 \
+        xc:"#090909" \
+        -gravity north \
+        -fill white \
+        -font DejaVu-Sans \
+        -pointsize 48 \
+        -annotate +0+120 "BITCOIN" \
+        -gravity center \
+        -fill white \
+        -font DejaVu-Sans \
+        -pointsize 140 \
+        -annotate +0-20 "\$${price}" \
+        "$OUTPUT"
+
+    printf 'Wallpaper saved to %s\n' "$OUTPUT"
+}
+
+set_wallpaper() {
+    make_wallpaper
+
+    if ! command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
+        echo "Could not find plasma-apply-wallpaperimage."
+        echo "This version currently supports KDE Plasma."
+        exit 1
+    fi
+
+    plasma-apply-wallpaperimage "$OUTPUT"
+
+    find "$CACHE_DIR" \
+        -name 'wallpaper-*.png' \
+        -type f \
+        -mmin +10 \
+        -delete
+
+    printf 'Wallpaper updated.\n'
+}
+
+show_help() {
+    echo "cryptopaper"
+    echo
+    echo "Usage:"
+    echo "  ./cryptopaper price    Show current Bitcoin price"
+    echo "  ./cryptopaper render   Generate wallpaper image"
+    echo "  ./cryptopaper set      Generate and set wallpaper"
+    echo "  ./cryptopaper help     Show this help"
+}
+
+case "${1:-help}" in
+    price)
+        show_price
+        ;;
+    render)
+        make_wallpaper
+        ;;
+    set)
+        set_wallpaper
+        ;;
+    help|--help|-h)
+        show_help
+        ;;
+    *)
+        echo "Unknown command: $1" >&2
+        echo "Run './cryptopaper help' for usage."
+        exit 1
+        ;;
+esac
