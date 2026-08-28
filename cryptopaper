@@ -6,6 +6,7 @@ PRICE_API="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currenci
 
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cryptopaper"
 PRICE_CACHE="$CACHE_DIR/market.json"
+SWAYBG_PID_FILE="$CACHE_DIR/swaybg.pid"
 
 DEFAULT_UPDATE_TIME="2m"
 
@@ -23,13 +24,11 @@ UPDATE_TIME="${3:-$DEFAULT_UPDATE_TIME}"
 
 RANGE_LABEL="${TIME_RANGE^^}"
 
-# Base resolution used when designing the wallpaper layout.
 BASE_WIDTH=1920
 BASE_HEIGHT=1080
 
-# These are automatically detected before generating the wallpaper.
-SCREEN_WIDTH=1920
-SCREEN_HEIGHT=1080
+SCREEN_WIDTH="$BASE_WIDTH"
+SCREEN_HEIGHT="$BASE_HEIGHT"
 
 
 get_days() {
@@ -146,7 +145,7 @@ validate_args() {
             parse_update_time "$UPDATE_TIME" >/dev/null || exit 1
             ;;
 
-        cache|clear-cache)
+        cache|clear-cache|info)
             if (( $# != 1 )); then
                 echo "Usage: ./cryptopaper $COMMAND" >&2
                 exit 1
@@ -162,48 +161,178 @@ validate_args() {
 }
 
 
+set_screen_size() {
+    local width="$1"
+    local height="$2"
+
+    if (( width >= 640 && height >= 480 )); then
+        SCREEN_WIDTH="$width"
+        SCREEN_HEIGHT="$height"
+        return 0
+    fi
+
+    return 1
+}
+
+
 get_screen_dimensions() {
     local size=""
-
-    # Debug command:
-    # CRYPTOPAPER_RESOLUTION=2560x1440 ./cryptopaper set
-    if [[ -n "${CRYPTOPAPER_RESOLUTION:-}" ]]; then
-        if [[ "$CRYPTOPAPER_RESOLUTION" =~ ^([0-9]+)x([0-9]+)$ ]]; then
-            SCREEN_WIDTH="${BASH_REMATCH[1]}"
-            SCREEN_HEIGHT="${BASH_REMATCH[2]}"
-            return
-        else
-            echo "Invalid CRYPTOPAPER_RESOLUTION: $CRYPTOPAPER_RESOLUTION" >&2
-            return 1
-        fi
-    fi
+    local desktop
 
     SCREEN_WIDTH="$BASE_WIDTH"
     SCREEN_HEIGHT="$BASE_HEIGHT"
 
-    if command -v kscreen-doctor >/dev/null 2>&1; then
-        size="$(
-            kscreen-doctor -o 2>/dev/null |
-            awk '
-                /Geometry:/ {
-                    if (match($0, /[0-9]+x[0-9]+/)) {
-                        print substr($0, RSTART, RLENGTH)
-                        exit
+    desktop="${XDG_CURRENT_DESKTOP:-}"
+    desktop="${desktop^^}"
+
+    #
+    # Manual testing override
+    #
+    if [[ -n "${CRYPTOPAPER_RESOLUTION:-}" ]]; then
+        if [[ "$CRYPTOPAPER_RESOLUTION" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+            if set_screen_size "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; then
+                return
+            fi
+        fi
+
+        echo "Invalid CRYPTOPAPER_RESOLUTION: $CRYPTOPAPER_RESOLUTION" >&2
+        return 1
+    fi
+
+    #
+    # KDE Plasma
+    #
+    if [[ "$desktop" == *"KDE"* || "$desktop" == *"PLASMA"* ]]; then
+        if command -v kscreen-doctor >/dev/null 2>&1; then
+            size="$(
+                timeout 2s kscreen-doctor -o 2>/dev/null |
+                awk '
+                    /Geometry:/ {
+                        if (match($0, /[0-9]+x[0-9]+/)) {
+                            print substr($0, RSTART, RLENGTH)
+                            exit
+                        }
                     }
-                }
-            '
-        )"
+                '
+            )"
+
+            if [[ "$size" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+                if set_screen_size "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; then
+                    return
+                fi
+            fi
+        fi
     fi
 
-    if [[ "$size" =~ ^([0-9]+)x([0-9]+)$ ]]; then
-        SCREEN_WIDTH="${BASH_REMATCH[1]}"
-        SCREEN_HEIGHT="${BASH_REMATCH[2]}"
+    #
+    # Hyprland
+    #
+    if [[ "$desktop" == *"HYPRLAND"* ||
+          -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]
+    then
+        if command -v hyprctl >/dev/null 2>&1; then
+            size="$(
+                timeout 2s hyprctl monitors -j 2>/dev/null |
+                jq -r '
+                    first(
+                        .[] |
+                        select(.focused == true) |
+                        "\(.width)x\(.height)"
+                    ) // empty
+                ' 2>/dev/null
+            )"
+
+            if [[ "$size" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+                if set_screen_size "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; then
+                    return
+                fi
+            fi
+        fi
     fi
 
-    if (( SCREEN_WIDTH <= 0 || SCREEN_HEIGHT <= 0 )); then
-        SCREEN_WIDTH="$BASE_WIDTH"
-        SCREEN_HEIGHT="$BASE_HEIGHT"
+    #
+    # Sway
+    #
+    if [[ "$desktop" == *"SWAY"* || -n "${SWAYSOCK:-}" ]]; then
+        if command -v swaymsg >/dev/null 2>&1; then
+            size="$(
+                timeout 2s swaymsg -t get_outputs -r 2>/dev/null |
+                jq -r '
+                    first(
+                        .[] |
+                        select(.focused == true) |
+                        "\(.rect.width)x\(.rect.height)"
+                    ) // empty
+                ' 2>/dev/null
+            )"
+
+            if [[ "$size" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+                if set_screen_size "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; then
+                    return
+                fi
+            fi
+        fi
     fi
+
+    #
+    # Generic X11 detection
+    #
+    if [[ "${XDG_SESSION_TYPE:-}" == "x11" ]]; then
+        if command -v xrandr >/dev/null 2>&1; then
+            size="$(
+                xrandr 2>/dev/null |
+                awk '
+                    / connected primary / {
+                        if (match($0, /[0-9]+x[0-9]+\+/)) {
+                            value = substr($0, RSTART, RLENGTH)
+                            sub(/\+$/, "", value)
+                            print value
+                            exit
+                        }
+                    }
+
+                    / connected / {
+                        if (fallback == "" && match($0, /[0-9]+x[0-9]+\+/)) {
+                            fallback = substr($0, RSTART, RLENGTH)
+                            sub(/\+$/, "", fallback)
+                        }
+                    }
+
+                    END {
+                        if (fallback != "") {
+                            print fallback
+                        }
+                    }
+                ' |
+                head -n 1
+            )"
+
+            if [[ "$size" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+                if set_screen_size "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; then
+                    return
+                fi
+            fi
+        fi
+
+        if command -v xdpyinfo >/dev/null 2>&1; then
+            size="$(
+                xdpyinfo 2>/dev/null |
+                awk '/dimensions:/ { print $2; exit }'
+            )"
+
+            if [[ "$size" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+                if set_screen_size "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"; then
+                    return
+                fi
+            fi
+        fi
+    fi
+
+    #
+    # Safe fallback
+    #
+    SCREEN_WIDTH="$BASE_WIDTH"
+    SCREEN_HEIGHT="$BASE_HEIGHT"
 }
 
 
@@ -304,7 +433,13 @@ get_price_json() {
         fi
     fi
 
-    if curl -fsS "$PRICE_API" -o "$PRICE_CACHE.tmp"; then
+    if curl \
+        --connect-timeout 10 \
+        --max-time 20 \
+        -fsS \
+        "$PRICE_API" \
+        -o "$PRICE_CACHE.tmp"
+    then
         if jq -e '.bitcoin.usd' "$PRICE_CACHE.tmp" >/dev/null 2>&1; then
             mv "$PRICE_CACHE.tmp" "$PRICE_CACHE"
             cat "$PRICE_CACHE"
@@ -367,7 +502,10 @@ get_chart_file() {
         fi
     fi
 
-    if curl -fsS \
+    if curl \
+        --connect-timeout 10 \
+        --max-time 20 \
+        -fsS \
         "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=${days}" \
         -o "$chart_cache.tmp"
     then
@@ -731,18 +869,530 @@ make_wallpaper() {
 }
 
 
+try_hyprpaper() {
+    if ! command -v hyprctl >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if ! pgrep -x hyprpaper >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if hyprctl hyprpaper reload ",$OUTPUT" >/dev/null 2>&1; then
+        echo "Wallpaper backend: hyprpaper"
+        return 0
+    fi
+
+    return 1
+}
+
+
+try_swww() {
+    if ! command -v swww >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if ! swww query >/dev/null 2>&1; then
+        if command -v swww-daemon >/dev/null 2>&1; then
+            swww-daemon >/dev/null 2>&1 &
+            sleep 0.5
+        fi
+    fi
+
+    if swww img "$OUTPUT" >/dev/null 2>&1; then
+        echo "Wallpaper backend: swww"
+        return 0
+    fi
+
+    return 1
+}
+
+
+stop_cryptopaper_swaybg() {
+    local pid
+
+    if [[ ! -f "$SWAYBG_PID_FILE" ]]; then
+        return
+    fi
+
+    pid="$(cat "$SWAYBG_PID_FILE" 2>/dev/null || true)"
+
+    if [[ "$pid" =~ ^[0-9]+$ ]] &&
+       kill -0 "$pid" 2>/dev/null
+    then
+        kill "$pid" 2>/dev/null || true
+    fi
+
+    rm -f "$SWAYBG_PID_FILE"
+}
+
+
+try_swaybg() {
+    local pid
+
+    if ! command -v swaybg >/dev/null 2>&1; then
+        return 1
+    fi
+
+    stop_cryptopaper_swaybg
+
+    swaybg \
+        -i "$OUTPUT" \
+        -m fill \
+        >/dev/null 2>&1 &
+
+    pid=$!
+
+    sleep 0.2
+
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "$pid" > "$SWAYBG_PID_FILE"
+        echo "Wallpaper backend: swaybg"
+        return 0
+    fi
+
+    return 1
+}
+
+
+try_xfce() {
+    local property
+    local found=false
+    local monitor=""
+    local workspace="0"
+    local default_property=""
+
+    if ! command -v xfconf-query >/dev/null 2>&1; then
+        return 1
+    fi
+
+    #
+    # Try existing XFCE wallpaper properties.
+    #
+    while IFS= read -r property; do
+        [[ -z "$property" ]] && continue
+
+        if xfconf-query \
+            -c xfce4-desktop \
+            -p "$property" \
+            -s "$OUTPUT" \
+            >/dev/null 2>&1
+        then
+            found=true
+        fi
+    done < <(
+        xfconf-query -c xfce4-desktop -l 2>/dev/null |
+        grep -E '/(last-image|image-path|last-single-image)$' || true
+    )
+
+    if [[ "$found" == true ]]; then
+        echo "Wallpaper backend: XFCE"
+        return 0
+    fi
+
+    #
+    # Fresh XFCE profile.
+    #
+    if command -v xrandr >/dev/null 2>&1; then
+        monitor="$(
+            xrandr --query 2>/dev/null |
+            awk '
+                / connected primary / {
+                    print $1
+                    exit
+                }
+
+                / connected / && fallback == "" {
+                    fallback = $1
+                }
+
+                END {
+                    if (fallback != "") {
+                        print fallback
+                    }
+                }
+            ' |
+            head -n 1
+        )"
+    fi
+
+    if [[ -n "$monitor" ]]; then
+        default_property="/backdrop/screen0/monitor${monitor}/workspace${workspace}/last-image"
+    else
+        default_property="/backdrop/screen0/monitor0/workspace${workspace}/last-image"
+    fi
+
+    if xfconf-query \
+        -c xfce4-desktop \
+        -p "$default_property" \
+        -n \
+        -t string \
+        -s "$OUTPUT" \
+        >/dev/null 2>&1
+    then
+        echo "Wallpaper backend: XFCE"
+        return 0
+    fi
+
+    if xfconf-query \
+        -c xfce4-desktop \
+        -p "$default_property" \
+        -s "$OUTPUT" \
+        >/dev/null 2>&1
+    then
+        echo "Wallpaper backend: XFCE"
+        return 0
+    fi
+
+    return 1
+}
+
+
+try_lxqt() {
+    if ! command -v pcmanfm-qt >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if pcmanfm-qt \
+        --set-wallpaper="$OUTPUT" \
+        >/dev/null 2>&1
+    then
+        echo "Wallpaper backend: LXQt"
+        return 0
+    fi
+
+    return 1
+}
+
+
+get_wallpaper_backend_name() {
+    local desktop
+
+    desktop="${XDG_CURRENT_DESKTOP:-}"
+    desktop="${desktop^^}"
+
+    if [[ "$desktop" == *"KDE"* || "$desktop" == *"PLASMA"* ]]; then
+        if command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
+            echo "KDE Plasma"
+            return
+        fi
+    fi
+
+    if [[ "$desktop" == *"GNOME"* ]]; then
+        if command -v gsettings >/dev/null 2>&1; then
+            echo "GNOME"
+            return
+        fi
+    fi
+
+    if [[ "$desktop" == *"CINNAMON"* ]]; then
+        if command -v gsettings >/dev/null 2>&1; then
+            echo "Cinnamon"
+            return
+        fi
+    fi
+
+    if [[ "$desktop" == *"MATE"* ]]; then
+        if command -v gsettings >/dev/null 2>&1; then
+            echo "MATE"
+            return
+        fi
+    fi
+
+    if [[ "$desktop" == *"XFCE"* ]]; then
+        if command -v xfconf-query >/dev/null 2>&1; then
+            echo "XFCE"
+            return
+        fi
+    fi
+
+    if [[ "$desktop" == *"LXQT"* ]]; then
+        if command -v pcmanfm-qt >/dev/null 2>&1; then
+            echo "LXQt"
+            return
+        fi
+    fi
+
+    if [[ "$desktop" == *"HYPRLAND"* ||
+          -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]
+    then
+        if command -v hyprpaper >/dev/null 2>&1; then
+            echo "hyprpaper"
+            return
+        fi
+
+        if command -v swww >/dev/null 2>&1; then
+            echo "swww"
+            return
+        fi
+
+        if command -v swaybg >/dev/null 2>&1; then
+            echo "swaybg"
+            return
+        fi
+    fi
+
+    if [[ "$desktop" == *"SWAY"* ||
+          -n "${SWAYSOCK:-}" ]]
+    then
+        if command -v swaybg >/dev/null 2>&1; then
+            echo "swaybg"
+            return
+        fi
+
+        if command -v swww >/dev/null 2>&1; then
+            echo "swww"
+            return
+        fi
+    fi
+
+    if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
+        if command -v swww >/dev/null 2>&1; then
+            echo "swww"
+            return
+        fi
+
+        if command -v swaybg >/dev/null 2>&1; then
+            echo "swaybg"
+            return
+        fi
+    fi
+
+    if command -v feh >/dev/null 2>&1; then
+        echo "feh"
+        return
+    fi
+
+    echo "none"
+}
+
+
+show_info() {
+    local backend
+
+    get_screen_dimensions
+    backend="$(get_wallpaper_backend_name)"
+
+    echo "cryptopaper info"
+    echo
+    echo "Resolution: ${SCREEN_WIDTH}x${SCREEN_HEIGHT}"
+    echo "Desktop: ${XDG_CURRENT_DESKTOP:-unknown}"
+    echo "Session: ${XDG_SESSION_TYPE:-unknown}"
+    echo "Wallpaper backend: $backend"
+}
+
+
+set_wallpaper_backend() {
+    local desktop
+
+    desktop="${XDG_CURRENT_DESKTOP:-}"
+    desktop="${desktop^^}"
+
+    #
+    # KDE Plasma
+    #
+    if [[ "$desktop" == *"KDE"* || "$desktop" == *"PLASMA"* ]]; then
+        if command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
+            if plasma-apply-wallpaperimage "$OUTPUT"; then
+                echo "Wallpaper backend: KDE Plasma"
+                return 0
+            fi
+        fi
+
+        echo "Could not set the KDE Plasma wallpaper." >&2
+        return 1
+    fi
+
+    #
+    # GNOME
+    #
+    if [[ "$desktop" == *"GNOME"* ]]; then
+        if command -v gsettings >/dev/null 2>&1; then
+            gsettings set \
+                org.gnome.desktop.background \
+                picture-uri \
+                "file://$OUTPUT"
+
+            gsettings set \
+                org.gnome.desktop.background \
+                picture-uri-dark \
+                "file://$OUTPUT" \
+                >/dev/null 2>&1 || true
+
+            gsettings set \
+                org.gnome.desktop.background \
+                picture-options \
+                "zoom" \
+                >/dev/null 2>&1 || true
+
+            echo "Wallpaper backend: GNOME"
+            return 0
+        fi
+
+        echo "Could not find gsettings for GNOME." >&2
+        return 1
+    fi
+
+    #
+    # Cinnamon
+    #
+    if [[ "$desktop" == *"CINNAMON"* ]]; then
+        if command -v gsettings >/dev/null 2>&1; then
+            gsettings set \
+                org.cinnamon.desktop.background \
+                picture-uri \
+                "file://$OUTPUT"
+
+            gsettings set \
+                org.cinnamon.desktop.background \
+                picture-options \
+                "scaled"
+
+            echo "Wallpaper backend: Cinnamon"
+            return 0
+        fi
+
+        echo "Could not find gsettings for Cinnamon." >&2
+        return 1
+    fi
+
+    #
+    # MATE
+    #
+    if [[ "$desktop" == *"MATE"* ]]; then
+        if command -v gsettings >/dev/null 2>&1; then
+            gsettings set \
+                org.mate.background \
+                picture-filename \
+                "$OUTPUT"
+
+            gsettings set \
+                org.mate.background \
+                picture-options \
+                "scaled"
+
+            echo "Wallpaper backend: MATE"
+            return 0
+        fi
+
+        echo "Could not find gsettings for MATE." >&2
+        return 1
+    fi
+
+    #
+    # XFCE
+    #
+    if [[ "$desktop" == *"XFCE"* ]]; then
+        if try_xfce; then
+            return 0
+        fi
+
+        echo "Could not set the XFCE wallpaper." >&2
+        return 1
+    fi
+
+    #
+    # LXQt
+    #
+    if [[ "$desktop" == *"LXQT"* ]]; then
+        if try_lxqt; then
+            return 0
+        fi
+
+        echo "Could not set the LXQt wallpaper." >&2
+        return 1
+    fi
+
+    #
+    # Hyprland
+    #
+    if [[ "$desktop" == *"HYPRLAND"* ||
+          -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]
+    then
+        if try_hyprpaper; then
+            return 0
+        fi
+
+        if try_swww; then
+            return 0
+        fi
+
+        if try_swaybg; then
+            return 0
+        fi
+
+        echo "No supported Hyprland wallpaper backend found." >&2
+        echo "Install hyprpaper, swww, or swaybg." >&2
+        return 1
+    fi
+
+    #
+    # Sway
+    #
+    if [[ "$desktop" == *"SWAY"* ||
+          -n "${SWAYSOCK:-}" ]]
+    then
+        if try_swaybg; then
+            return 0
+        fi
+
+        if try_swww; then
+            return 0
+        fi
+
+        echo "No supported Sway wallpaper backend found." >&2
+        echo "Install swaybg or swww." >&2
+        return 1
+    fi
+
+    #
+    # Generic Wayland fallback
+    #
+    if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
+        if try_swww; then
+            return 0
+        fi
+
+        if try_swaybg; then
+            return 0
+        fi
+    fi
+
+    #
+    # Generic X11 fallback
+    #
+    if command -v feh >/dev/null 2>&1; then
+        if feh --bg-fill "$OUTPUT"; then
+            echo "Wallpaper backend: feh"
+            return 0
+        fi
+    fi
+
+    echo "No supported wallpaper backend found." >&2
+    echo >&2
+    echo "Supported backends:" >&2
+    echo "  KDE Plasma  - plasma-apply-wallpaperimage" >&2
+    echo "  GNOME       - gsettings" >&2
+    echo "  Cinnamon    - gsettings" >&2
+    echo "  MATE        - gsettings" >&2
+    echo "  XFCE        - xfconf-query" >&2
+    echo "  LXQt        - pcmanfm-qt" >&2
+    echo "  Hyprland    - hyprpaper, swww, or swaybg" >&2
+    echo "  Sway        - swaybg or swww" >&2
+    echo "  X11         - feh" >&2
+
+    return 1
+}
+
+
 set_wallpaper() {
     local mode="${1:-}"
 
-    if ! command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
-        echo "Could not find plasma-apply-wallpaperimage." >&2
-        echo "This version currently supports KDE Plasma." >&2
-        exit 1
-    fi
-
     make_wallpaper "$mode"
 
-    plasma-apply-wallpaperimage "$OUTPUT"
+    if ! set_wallpaper_backend; then
+        return 1
+    fi
 
     find "$CACHE_DIR" \
         -name 'wallpaper-*.png' \
@@ -790,6 +1440,7 @@ show_help() {
     echo "  ./cryptopaper price"
     echo "  ./cryptopaper set [days]"
     echo "  ./cryptopaper run [days] [update-time]"
+    echo "  ./cryptopaper info"
     echo "  ./cryptopaper cache"
     echo "  ./cryptopaper clear-cache"
     echo
@@ -797,6 +1448,7 @@ show_help() {
     echo "  price        Show the current Bitcoin price"
     echo "  set          Generate and set the wallpaper once"
     echo "  run          Keep the wallpaper automatically updated"
+    echo "  info         Show detected resolution and wallpaper backend"
     echo "  cache        Show cached API data"
     echo "  clear-cache  Remove cached API data"
     echo
@@ -808,6 +1460,7 @@ show_help() {
     echo "  ./cryptopaper run 7d"
     echo "  ./cryptopaper run 1d 30s"
     echo "  ./cryptopaper run 7d 5m"
+    echo "  ./cryptopaper info"
     echo "  ./cryptopaper cache"
     echo "  ./cryptopaper clear-cache"
     echo
@@ -822,6 +1475,7 @@ show_help() {
     echo "Default range: 1d"
     echo "Default update time: 2m"
     echo "Screen resolution: automatically detected"
+    echo "Wallpaper backend: automatically detected"
     echo
     echo "Press Ctrl+C to stop the run command."
 }
@@ -840,6 +1494,10 @@ case "$COMMAND" in
 
     run)
         run_wallpaper
+        ;;
+
+    info)
+        show_info
         ;;
 
     cache)
