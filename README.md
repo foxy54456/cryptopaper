@@ -31,6 +31,92 @@ It fetches market data from CoinGecko, generates a wallpaper with ImageMagick, d
 * Generic Wayland support
 * Generic X11 support
 
+## Installation
+
+Clone the repository:
+
+```bash
+git clone <repository-url>
+cd cryptopaper
+```
+
+Make the script executable:
+
+```bash
+chmod +x cryptopaper
+```
+
+Create a local bin directory if it does not already exist:
+
+```bash
+mkdir -p ~/.local/bin
+```
+
+Create a symbolic link so `cryptopaper` can be run as a normal command:
+
+```bash
+ln -sf "$PWD/cryptopaper" ~/.local/bin/cryptopaper
+```
+
+Make sure `~/.local/bin` is in your `PATH`.
+
+### Fish
+
+```fish
+fish_add_path ~/.local/bin
+exec fish
+```
+
+### Bash
+
+Add this to `~/.bashrc`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then reload Bash:
+
+```bash
+source ~/.bashrc
+```
+
+### Zsh
+
+Add this to `~/.zshrc`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then reload Zsh:
+
+```bash
+source ~/.zshrc
+```
+
+You can now run:
+
+```bash
+cryptopaper help
+cryptopaper price eth
+cryptopaper set sol 7d
+```
+
+Check that the command is available:
+
+```bash
+which cryptopaper
+```
+
+It should show something similar to:
+
+```text
+/home/your-user/.local/bin/cryptopaper
+```
+
+The symbolic link points to the script inside the cloned repository, so updating the repository also updates the `cryptopaper` command.
+
 ## Supported cryptocurrencies
 
 cryptopaper currently supports the following aliases:
@@ -50,13 +136,13 @@ Bitcoin is the default cryptocurrency.
 For example:
 
 ```bash
-./cryptopaper price
+cryptopaper price
 ```
 
 is equivalent to:
 
 ```bash
-./cryptopaper price btc
+cryptopaper price btc
 ```
 
 ## Supported currencies
@@ -78,7 +164,7 @@ Your selected currency is saved permanently until you change it again.
 For example:
 
 ```bash
-./cryptopaper cur EUR
+cryptopaper cur EUR
 ```
 
 changes cryptopaper to euros.
@@ -86,7 +172,7 @@ changes cryptopaper to euros.
 After that:
 
 ```bash
-./cryptopaper price eth
+cryptopaper price eth
 ```
 
 will display the Ethereum price in euros.
@@ -94,7 +180,7 @@ will display the Ethereum price in euros.
 To switch back to US dollars:
 
 ```bash
-./cryptopaper cur USD
+cryptopaper cur USD
 ```
 
 ## Price precision
@@ -216,37 +302,16 @@ swaybg
 feh
 ```
 
-## Installation
-
-Clone the repository:
-
-```bash
-git clone <repository-url>
-cd cryptopaper
-```
-
-Make the script executable:
-
-```bash
-chmod +x cryptopaper
-```
-
-Show the help page:
-
-```bash
-./cryptopaper help
-```
-
 ## Usage
 
 ```bash
-./cryptopaper price [coin]
-./cryptopaper set [coin] [days]
-./cryptopaper run [coin] [days] [update-time]
-./cryptopaper cur USD|EUR|GBP
-./cryptopaper info
-./cryptopaper cache
-./cryptopaper clear-cache
+cryptopaper price [coin]
+cryptopaper set [coin] [days]
+cryptopaper run [coin] [days] [update-time]
+cryptopaper cur USD|EUR|GBP
+cryptopaper info
+cryptopaper cache
+cryptopaper clear-cache
 ```
 
 ## Commands
@@ -256,7 +321,7 @@ Show the help page:
 Bitcoin is used by default:
 
 ```bash
-./cryptopaper price
+cryptopaper price
 ```
 
 Example:
@@ -268,12 +333,12 @@ BITCOIN: $79308.00
 Specify another cryptocurrency using its alias:
 
 ```bash
-./cryptopaper price eth
-./cryptopaper price sol
-./cryptopaper price doge
-./cryptopaper price xmr
-./cryptopaper price bnb
-./cryptopaper price xrp
+cryptopaper price eth
+cryptopaper price sol
+cryptopaper price doge
+cryptopaper price xmr
+cryptopaper price bnb
+cryptopaper price xrp
 ```
 
 Examples:
@@ -291,8 +356,8 @@ The displayed fiat currency depends on your currently selected currency.
 For example:
 
 ```bash
-./cryptopaper cur EUR
-./cryptopaper price eth
+cryptopaper cur EUR
+cryptopaper price eth
 ```
 
 may display:
@@ -308,42 +373,42 @@ ETHEREUM: €2310.42
 Use Bitcoin with the default 1-day chart:
 
 ```bash
-./cryptopaper set
+cryptopaper set
 ```
 
 Use another cryptocurrency:
 
 ```bash
-./cryptopaper set eth
+cryptopaper set eth
 ```
 
 Use another cryptocurrency with a custom chart range:
 
 ```bash
-./cryptopaper set eth 7d
-./cryptopaper set sol 30d
-./cryptopaper set doge 2d
+cryptopaper set eth 7d
+cryptopaper set sol 30d
+cryptopaper set doge 2d
 ```
 
 Bitcoin-only shorthand is still supported:
 
 ```bash
-./cryptopaper set 7d
+cryptopaper set 7d
 ```
 
 This is equivalent to:
 
 ```bash
-./cryptopaper set btc 7d
+cryptopaper set btc 7d
 ```
 
 Other examples:
 
 ```bash
-./cryptopaper set btc 1d
-./cryptopaper set xmr 16d
-./cryptopaper set bnb 30d
-./cryptopaper set xrp 7d
+cryptopaper set btc 1d
+cryptopaper set xmr 16d
+cryptopaper set bnb 30d
+cryptopaper set xrp 7d
 ```
 
 The wallpaper displays:
@@ -362,7 +427,7 @@ The wallpaper displays:
 Start automatic updates using Bitcoin:
 
 ```bash
-./cryptopaper run
+cryptopaper run
 ```
 
 The defaults are:
@@ -377,34 +442,34 @@ Update interval: 2 minutes
 Use another cryptocurrency:
 
 ```bash
-./cryptopaper run eth
+cryptopaper run eth
 ```
 
 Use a custom chart range:
 
 ```bash
-./cryptopaper run sol 7d
+cryptopaper run sol 7d
 ```
 
 Use a custom range and update interval:
 
 ```bash
-./cryptopaper run btc 1d 30s
-./cryptopaper run eth 7d 5m
-./cryptopaper run doge 30d 10m
-./cryptopaper run xmr 90d 1h
+cryptopaper run btc 1d 30s
+cryptopaper run eth 7d 5m
+cryptopaper run doge 30d 10m
+cryptopaper run xmr 90d 1h
 ```
 
 Bitcoin-only shorthand is still supported:
 
 ```bash
-./cryptopaper run 7d 5m
+cryptopaper run 7d 5m
 ```
 
 which is equivalent to:
 
 ```bash
-./cryptopaper run btc 7d 5m
+cryptopaper run btc 7d 5m
 ```
 
 Press:
@@ -422,7 +487,7 @@ Very short update intervals are supported.
 For example:
 
 ```bash
-./cryptopaper run doge 1d 15s
+cryptopaper run doge 1d 15s
 ```
 
 However, CoinGecko may return the same price for multiple requests, so very short intervals do not guarantee that the displayed price will change every update.
@@ -442,15 +507,15 @@ The default update interval is:
 Change the active fiat currency with:
 
 ```bash
-./cryptopaper cur USD
-./cryptopaper cur EUR
-./cryptopaper cur GBP
+cryptopaper cur USD
+cryptopaper cur EUR
+cryptopaper cur GBP
 ```
 
 For example:
 
 ```bash
-./cryptopaper cur EUR
+cryptopaper cur EUR
 ```
 
 cryptopaper will then use EUR for both current cryptocurrency prices and chart data.
@@ -460,10 +525,10 @@ The selected currency persists across future runs until you change it again.
 For example:
 
 ```bash
-./cryptopaper cur GBP
-./cryptopaper price btc
-./cryptopaper set eth 7d
-./cryptopaper run sol 30d 5m
+cryptopaper cur GBP
+cryptopaper price btc
+cryptopaper set eth 7d
+cryptopaper run sol 30d 5m
 ```
 
 will use GBP for all three cryptocurrencies.
@@ -471,7 +536,7 @@ will use GBP for all three cryptocurrencies.
 To switch back to the default:
 
 ```bash
-./cryptopaper cur USD
+cryptopaper cur USD
 ```
 
 Unsupported currencies are rejected.
@@ -479,7 +544,7 @@ Unsupported currencies are rejected.
 For example:
 
 ```bash
-./cryptopaper cur CAD
+cryptopaper cur CAD
 ```
 
 will fail because only USD, EUR, and GBP are currently supported.
@@ -513,9 +578,9 @@ Any positive number of days can be used.
 Examples:
 
 ```bash
-./cryptopaper set eth 14d
-./cryptopaper set sol 45d
-./cryptopaper set xmr 90d
+cryptopaper set eth 14d
+cryptopaper set sol 45d
+cryptopaper set xmr 90d
 ```
 
 ## Update intervals
@@ -548,7 +613,7 @@ The default update interval is:
 To see what cryptopaper detected:
 
 ```bash
-./cryptopaper info
+cryptopaper info
 ```
 
 This shows information such as:
@@ -578,13 +643,13 @@ cryptopaper caches CoinGecko API responses to avoid unnecessary requests and pro
 View cache information:
 
 ```bash
-./cryptopaper cache
+cryptopaper cache
 ```
 
 Clear cached API data:
 
 ```bash
-./cryptopaper clear-cache
+cryptopaper clear-cache
 ```
 
 Cache files are separated by:
@@ -699,15 +764,15 @@ The wallpaper layout, text sizes, graph dimensions, and spacing automatically sc
 For testing, the resolution can also be overridden:
 
 ```bash
-CRYPTOPAPER_RESOLUTION=2560x1440 ./cryptopaper set
+CRYPTOPAPER_RESOLUTION=2560x1440 cryptopaper set
 ```
 
 Other examples:
 
 ```bash
-CRYPTOPAPER_RESOLUTION=3840x2160 ./cryptopaper set eth 7d
-CRYPTOPAPER_RESOLUTION=3440x1440 ./cryptopaper set sol 30d
-CRYPTOPAPER_RESOLUTION=1366x768 ./cryptopaper set doge
+CRYPTOPAPER_RESOLUTION=3840x2160 cryptopaper set eth 7d
+CRYPTOPAPER_RESOLUTION=3440x1440 cryptopaper set sol 30d
+CRYPTOPAPER_RESOLUTION=1366x768 cryptopaper set doge
 ```
 
 The override only changes the generated wallpaper size.
@@ -760,97 +825,97 @@ cryptopaper attempts to detect existing XFCE wallpaper properties and can initia
 Show the Bitcoin price in the current currency:
 
 ```bash
-./cryptopaper price
+cryptopaper price
 ```
 
 Show Ethereum:
 
 ```bash
-./cryptopaper price eth
+cryptopaper price eth
 ```
 
 Show Dogecoin with extra decimal precision:
 
 ```bash
-./cryptopaper price doge
+cryptopaper price doge
 ```
 
 Switch to euros:
 
 ```bash
-./cryptopaper cur EUR
+cryptopaper cur EUR
 ```
 
 Show Ethereum in euros:
 
 ```bash
-./cryptopaper price eth
+cryptopaper price eth
 ```
 
 Generate an Ethereum seven-day wallpaper in euros:
 
 ```bash
-./cryptopaper set eth 7d
+cryptopaper set eth 7d
 ```
 
 Switch to GBP:
 
 ```bash
-./cryptopaper cur GBP
+cryptopaper cur GBP
 ```
 
 Generate a Monero 30-day wallpaper in pounds:
 
 ```bash
-./cryptopaper set xmr 30d
+cryptopaper set xmr 30d
 ```
 
 Continuously update XRP every two minutes:
 
 ```bash
-./cryptopaper run xrp 1d 2m
+cryptopaper run xrp 1d 2m
 ```
 
 Switch back to USD:
 
 ```bash
-./cryptopaper cur USD
+cryptopaper cur USD
 ```
 
 Generate a Bitcoin one-day wallpaper:
 
 ```bash
-./cryptopaper set btc 1d
+cryptopaper set btc 1d
 ```
 
 Generate a Solana 30-day wallpaper:
 
 ```bash
-./cryptopaper set sol 30d
+cryptopaper set sol 30d
 ```
 
 Continuously update Dogecoin every 30 seconds:
 
 ```bash
-./cryptopaper run doge 1d 30s
+cryptopaper run doge 1d 30s
 ```
 
 Show detected system information:
 
 ```bash
-./cryptopaper info
+cryptopaper info
 ```
 
 View the cache:
 
 ```bash
-./cryptopaper cache
+cryptopaper cache
 ```
 
 Clear the API cache:
 
 ```bash
-./cryptopaper clear-cache
+cryptopaper clear-cache
 ```
 
 ## Data source
