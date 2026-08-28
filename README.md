@@ -445,3 +445,9 @@ Clear the API cache:
 ## Data source
 
 Bitcoin pricing and chart data are retrieved from the CoinGecko API.
+
+## License
+
+This project is released into the public domain under The Unlicense.
+
+See the [LICENSE](LICENSE) file for details.
