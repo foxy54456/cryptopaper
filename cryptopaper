@@ -5,11 +5,10 @@ set -euo pipefail
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cryptopaper"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cryptopaper"
 CONFIG_FILE="$CONFIG_DIR/config"
+SWAYBG_PID_FILE="$CACHE_DIR/swaybg.pid"
 
 DEFAULT_CURRENCY="USD"
 CURRENCY="$DEFAULT_CURRENCY"
-PRICE_CACHE="$CACHE_DIR/market.json"
-SWAYBG_PID_FILE="$CACHE_DIR/swaybg.pid"
 
 DEFAULT_UPDATE_TIME="2m"
 
@@ -21,17 +20,21 @@ WHITE="#ffffff"
 BACKGROUND="#090909"
 GRAY="#aaaaaa"
 
-COMMAND="${1:-help}"
-TIME_RANGE="${2:-1d}"
-UPDATE_TIME="${3:-$DEFAULT_UPDATE_TIME}"
-
-RANGE_LABEL="${TIME_RANGE^^}"
-
 BASE_WIDTH=1920
 BASE_HEIGHT=1080
 
 SCREEN_WIDTH="$BASE_WIDTH"
 SCREEN_HEIGHT="$BASE_HEIGHT"
+
+COMMAND="${1:-help}"
+
+COIN="btc"
+COIN_ID="bitcoin"
+COIN_NAME="BITCOIN"
+
+TIME_RANGE="1d"
+UPDATE_TIME="$DEFAULT_UPDATE_TIME"
+RANGE_LABEL="1D"
 
 
 load_currency() {
@@ -43,8 +46,12 @@ load_currency() {
     fi
 
     case "$value" in
-        USD|EUR|GBP) CURRENCY="$value" ;;
-        *) CURRENCY="$DEFAULT_CURRENCY" ;;
+        USD|EUR|GBP)
+            CURRENCY="$value"
+            ;;
+        *)
+            CURRENCY="$DEFAULT_CURRENCY"
+            ;;
     esac
 }
 
@@ -68,7 +75,8 @@ set_currency() {
     value="${value^^}"
 
     case "$value" in
-        USD|EUR|GBP) ;;
+        USD|EUR|GBP)
+            ;;
         *)
             echo "Unsupported currency: ${value:-<empty>}" >&2
             echo "Supported currencies: USD, EUR, GBP" >&2
@@ -80,10 +88,173 @@ set_currency() {
     printf 'currency=%s\n' "$value" > "$CONFIG_FILE"
     CURRENCY="$value"
 
-    # Cached market/chart data is currency-specific, so clear it when switching.
-    clear_cache >/dev/null
-
     echo "Currency set to $CURRENCY ($(get_currency_symbol))."
+}
+
+
+set_coin() {
+    local coin="${1,,}"
+
+    case "$coin" in
+        btc)
+            COIN="btc"
+            COIN_ID="bitcoin"
+            COIN_NAME="BITCOIN"
+            ;;
+
+        eth)
+            COIN="eth"
+            COIN_ID="ethereum"
+            COIN_NAME="ETHEREUM"
+            ;;
+
+        sol)
+            COIN="sol"
+            COIN_ID="solana"
+            COIN_NAME="SOLANA"
+            ;;
+
+        doge)
+            COIN="doge"
+            COIN_ID="dogecoin"
+            COIN_NAME="DOGECOIN"
+            ;;
+
+        xmr)
+            COIN="xmr"
+            COIN_ID="monero"
+            COIN_NAME="MONERO"
+            ;;
+
+        bnb)
+            COIN="bnb"
+            COIN_ID="binancecoin"
+            COIN_NAME="BNB"
+            ;;
+
+        xrp)
+            COIN="xrp"
+            COIN_ID="ripple"
+            COIN_NAME="XRP"
+            ;;
+
+        *)
+            echo "Unsupported coin: $1" >&2
+            echo >&2
+            echo "Supported coins:" >&2
+            echo "  btc" >&2
+            echo "  eth" >&2
+            echo "  sol" >&2
+            echo "  doge" >&2
+            echo "  xmr" >&2
+            echo "  bnb" >&2
+            echo "  xrp" >&2
+            return 1
+            ;;
+    esac
+}
+
+
+parse_cli_args() {
+    case "$COMMAND" in
+        price)
+            if (( $# > 2 )); then
+                echo "Usage: ./cryptopaper price [coin]" >&2
+                exit 1
+            fi
+
+            if (( $# == 2 )); then
+                set_coin "$2" || exit 1
+            else
+                set_coin "btc"
+            fi
+            ;;
+
+        set)
+            if (( $# > 3 )); then
+                echo "Usage: ./cryptopaper set [coin] [days]" >&2
+                exit 1
+            fi
+
+            if (( $# == 1 )); then
+                set_coin "btc"
+
+            elif (( $# == 2 )); then
+                if [[ "$2" =~ ^[1-9][0-9]*d$ ]]; then
+                    set_coin "btc"
+                    TIME_RANGE="$2"
+                else
+                    set_coin "$2" || exit 1
+                fi
+
+            elif (( $# == 3 )); then
+                set_coin "$2" || exit 1
+                TIME_RANGE="$3"
+            fi
+            ;;
+
+        run)
+            if (( $# > 4 )); then
+                echo "Usage: ./cryptopaper run [coin] [days] [update-time]" >&2
+                exit 1
+            fi
+
+            if (( $# == 1 )); then
+                set_coin "btc"
+
+            elif (( $# == 2 )); then
+                if [[ "$2" =~ ^[1-9][0-9]*d$ ]]; then
+                    set_coin "btc"
+                    TIME_RANGE="$2"
+                else
+                    set_coin "$2" || exit 1
+                fi
+
+            elif (( $# == 3 )); then
+                if [[ "$2" =~ ^[1-9][0-9]*d$ ]]; then
+                    set_coin "btc"
+                    TIME_RANGE="$2"
+                    UPDATE_TIME="$3"
+                else
+                    set_coin "$2" || exit 1
+                    TIME_RANGE="$3"
+                fi
+
+            elif (( $# == 4 )); then
+                set_coin "$2" || exit 1
+                TIME_RANGE="$3"
+                UPDATE_TIME="$4"
+            fi
+            ;;
+
+        cur)
+            if (( $# != 2 )); then
+                echo "Usage: ./cryptopaper cur USD|EUR|GBP" >&2
+                exit 1
+            fi
+
+            set_coin "btc"
+            ;;
+
+        cache|clear-cache|info)
+            if (( $# != 1 )); then
+                echo "Usage: ./cryptopaper $COMMAND" >&2
+                exit 1
+            fi
+
+            set_coin "btc"
+            ;;
+
+        help|--help|-h)
+            set_coin "btc"
+            ;;
+
+        *)
+            set_coin "btc"
+            ;;
+    esac
+
+    RANGE_LABEL="${TIME_RANGE^^}"
 }
 
 
@@ -109,9 +280,11 @@ parse_update_time() {
             s)
                 echo "$amount"
                 ;;
+
             m)
                 echo $(( amount * 60 ))
                 ;;
+
             h)
                 echo $(( amount * 3600 ))
                 ;;
@@ -175,47 +348,16 @@ format_age() {
 
 validate_args() {
     case "$COMMAND" in
-        price)
-            if (( $# != 1 )); then
-                echo "Usage: ./cryptopaper price" >&2
-                exit 1
-            fi
+        price|cur|cache|clear-cache|info|help|--help|-h)
             ;;
 
         set)
-            if (( $# > 2 )); then
-                echo "Usage: ./cryptopaper set [days]" >&2
-                exit 1
-            fi
-
             get_days >/dev/null || exit 1
             ;;
 
         run)
-            if (( $# > 3 )); then
-                echo "Usage: ./cryptopaper run [days] [update-time]" >&2
-                exit 1
-            fi
-
             get_days >/dev/null || exit 1
             parse_update_time "$UPDATE_TIME" >/dev/null || exit 1
-            ;;
-
-        cur)
-            if (( $# != 2 )); then
-                echo "Usage: ./cryptopaper cur USD|EUR|GBP" >&2
-                exit 1
-            fi
-            ;;
-
-        cache|clear-cache|info)
-            if (( $# != 1 )); then
-                echo "Usage: ./cryptopaper $COMMAND" >&2
-                exit 1
-            fi
-            ;;
-
-        help|--help|-h)
             ;;
 
         *)
@@ -249,7 +391,7 @@ get_screen_dimensions() {
     desktop="${desktop^^}"
 
     #
-    # Manual testing override
+    # Manual resolution override
     #
     if [[ -n "${CRYPTOPAPER_RESOLUTION:-}" ]]; then
         if [[ "$CRYPTOPAPER_RESOLUTION" =~ ^([0-9]+)x([0-9]+)$ ]]; then
@@ -316,7 +458,9 @@ get_screen_dimensions() {
     #
     # Sway
     #
-    if [[ "$desktop" == *"SWAY"* || -n "${SWAYSOCK:-}" ]]; then
+    if [[ "$desktop" == *"SWAY"* ||
+          -n "${SWAYSOCK:-}" ]]
+    then
         if command -v swaymsg >/dev/null 2>&1; then
             size="$(
                 timeout 2s swaymsg -t get_outputs -r 2>/dev/null |
@@ -338,7 +482,7 @@ get_screen_dimensions() {
     fi
 
     #
-    # Generic X11 detection
+    # Generic X11
     #
     if [[ "${XDG_SESSION_TYPE:-}" == "x11" ]]; then
         if command -v xrandr >/dev/null 2>&1; then
@@ -391,9 +535,6 @@ get_screen_dimensions() {
         fi
     fi
 
-    #
-    # Safe fallback
-    #
     SCREEN_WIDTH="$BASE_WIDTH"
     SCREEN_HEIGHT="$BASE_HEIGHT"
 }
@@ -478,25 +619,37 @@ get_cache_seconds() {
 }
 
 
+get_price_cache_file() {
+    printf '%s/%s-market-%s.json\n' \
+        "$CACHE_DIR" \
+        "$COIN" \
+        "${CURRENCY,,}"
+}
+
+
 get_price_json() {
     local mode="${1:-}"
+
     local cache_seconds
     local age
     local api_currency
     local price_api
+    local price_cache
 
     api_currency="$(get_currency_api_code)"
-    price_api="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=${api_currency}"
 
+    price_api="https://api.coingecko.com/api/v3/simple/price?ids=${COIN_ID}&vs_currencies=${api_currency}"
+
+    price_cache="$(get_price_cache_file)"
     cache_seconds="$(get_cache_seconds "$mode")"
 
     mkdir -p "$CACHE_DIR"
 
-    if [[ -f "$PRICE_CACHE" ]]; then
-        age=$(( $(date +%s) - $(stat -c %Y "$PRICE_CACHE") ))
+    if [[ -f "$price_cache" ]]; then
+        age=$(( $(date +%s) - $(stat -c %Y "$price_cache") ))
 
         if (( age < cache_seconds )); then
-            cat "$PRICE_CACHE"
+            cat "$price_cache"
             return
         fi
     fi
@@ -506,30 +659,38 @@ get_price_json() {
         --max-time 20 \
         -fsS \
         "$price_api" \
-        -o "$PRICE_CACHE.tmp"
+        -o "$price_cache.tmp"
     then
-        if jq -e --arg cur "$api_currency" '.bitcoin[$cur]' "$PRICE_CACHE.tmp" >/dev/null 2>&1; then
-            mv "$PRICE_CACHE.tmp" "$PRICE_CACHE"
-            cat "$PRICE_CACHE"
+        if jq \
+            -e \
+            --arg coin "$COIN_ID" \
+            --arg cur "$api_currency" \
+            '.[$coin][$cur]' \
+            "$price_cache.tmp" \
+            >/dev/null 2>&1
+        then
+            mv "$price_cache.tmp" "$price_cache"
+            cat "$price_cache"
             return
         fi
 
-        rm -f "$PRICE_CACHE.tmp"
+        rm -f "$price_cache.tmp"
     fi
 
-    if [[ -f "$PRICE_CACHE" ]]; then
-        echo "Price API unavailable, using cached data." >&2
-        cat "$PRICE_CACHE"
+    if [[ -f "$price_cache" ]]; then
+        echo "Price API unavailable, using cached $COIN $CURRENCY data." >&2
+        cat "$price_cache"
         return
     fi
 
-    echo "Could not fetch Bitcoin price." >&2
+    echo "Could not fetch $COIN_NAME price in $CURRENCY." >&2
     return 1
 }
 
 
 get_price() {
     local mode="${1:-}"
+
     local response
     local price
     local api_currency
@@ -537,14 +698,29 @@ get_price() {
     api_currency="$(get_currency_api_code)"
     response="$(get_price_json "$mode")" || return 1
 
-    price="$(printf '%s' "$response" | jq -r --arg cur "$api_currency" '.bitcoin[$cur] // empty')"
+    price="$(
+        printf '%s' "$response" |
+        jq \
+            -r \
+            --arg coin "$COIN_ID" \
+            --arg cur "$api_currency" \
+            '.[$coin][$cur] // empty'
+    )"
 
     if [[ -z "$price" ]]; then
-        echo "Could not get Bitcoin price." >&2
+        echo "Could not get $COIN_NAME price." >&2
         return 1
     fi
 
-    printf '%.2f\n' "$price"
+    awk -v price="$price" 'BEGIN {
+        if (price >= 100) {
+            printf "%.2f\n", price
+        } else if (price >= 1) {
+            printf "%.4f\n", price
+        } else {
+            printf "%.6f\n", price
+        }
+    }'
 }
 
 
@@ -556,9 +732,12 @@ get_chart_file() {
     local cache_seconds
     local age
     local count
+    local api_currency
 
     days="$(get_days)"
-    chart_cache="$CACHE_DIR/chart-${days}d-${CURRENCY,,}.json"
+    api_currency="$(get_currency_api_code)"
+
+    chart_cache="$CACHE_DIR/${COIN}-chart-${days}d-${api_currency}.json"
     cache_seconds="$(get_cache_seconds "$mode")"
 
     mkdir -p "$CACHE_DIR"
@@ -576,12 +755,14 @@ get_chart_file() {
         --connect-timeout 10 \
         --max-time 20 \
         -fsS \
-        "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=$(get_currency_api_code)&days=${days}" \
+        "https://api.coingecko.com/api/v3/coins/${COIN_ID}/market_chart?vs_currency=${api_currency}&days=${days}" \
         -o "$chart_cache.tmp"
     then
         count="$(jq '.prices | length' "$chart_cache.tmp")"
 
-        if [[ "$count" =~ ^[0-9]+$ ]] && (( count >= 2 )); then
+        if [[ "$count" =~ ^[0-9]+$ ]] &&
+           (( count >= 2 ))
+        then
             mv "$chart_cache.tmp" "$chart_cache"
             printf '%s\n' "$chart_cache"
             return
@@ -591,12 +772,12 @@ get_chart_file() {
     fi
 
     if [[ -f "$chart_cache" ]]; then
-        echo "Chart API unavailable, using cached ${days}d data." >&2
+        echo "Chart API unavailable, using cached $COIN ${days}d $CURRENCY data." >&2
         printf '%s\n' "$chart_cache"
         return
     fi
 
-    echo "Could not fetch chart data." >&2
+    echo "Could not fetch $COIN_NAME chart data." >&2
     return 1
 }
 
@@ -775,17 +956,22 @@ make_graph_draw_args() {
 
 show_price() {
     local price
+    local symbol
 
     price="$(get_price)"
+    symbol="$(get_currency_symbol)"
 
-    printf 'Bitcoin: %s%s\n' "$(get_currency_symbol)" "$price"
+    printf '%s: %s%s\n' \
+        "$COIN_NAME" \
+        "$symbol" \
+        "$price"
 }
 
 
 show_cache() {
     local now
     local age
-    local found_chart=false
+    local found=false
     local file
     local name
 
@@ -799,21 +985,10 @@ show_cache() {
         return
     fi
 
-    if [[ -f "$PRICE_CACHE" ]]; then
-        age=$(( now - $(stat -c %Y "$PRICE_CACHE") ))
-
-        echo "Price:"
-        echo "  market.json — $(format_age "$age") old"
-    else
-        echo "Price:"
-        echo "  not cached"
-    fi
-
-    echo
-    echo "Charts:"
+    echo "Price caches:"
 
     while IFS= read -r file; do
-        found_chart=true
+        found=true
 
         age=$(( now - $(stat -c %Y "$file") ))
         name="$(basename "$file")"
@@ -823,12 +998,37 @@ show_cache() {
         find "$CACHE_DIR" \
             -maxdepth 1 \
             -type f \
-            -name 'chart-*d-*.json' \
+            -name '*-market-*.json' \
             -print 2>/dev/null |
         sort
     )
 
-    if [[ "$found_chart" == false ]]; then
+    if [[ "$found" == false ]]; then
+        echo "  no price data cached"
+    fi
+
+    echo
+    echo "Chart caches:"
+
+    found=false
+
+    while IFS= read -r file; do
+        found=true
+
+        age=$(( now - $(stat -c %Y "$file") ))
+        name="$(basename "$file")"
+
+        echo "  $name — $(format_age "$age") old"
+    done < <(
+        find "$CACHE_DIR" \
+            -maxdepth 1 \
+            -type f \
+            -name '*-chart-*d-*.json' \
+            -print 2>/dev/null |
+        sort
+    )
+
+    if [[ "$found" == false ]]; then
         echo "  no chart data cached"
     fi
 
@@ -841,15 +1041,21 @@ show_cache() {
 clear_cache() {
     mkdir -p "$CACHE_DIR"
 
-    rm -f \
-        "$PRICE_CACHE" \
-        "$PRICE_CACHE.tmp"
-
     find "$CACHE_DIR" \
         -maxdepth 1 \
         -type f \
         \( \
-            -name 'chart-*d-*.json' \
+            -name '*-market-*.json' \
+            -o -name '*-market-*.json.tmp' \
+            -o -name '*-chart-*d-*.json' \
+            -o -name '*-chart-*d-*.json.tmp' \
+            -o -name '*-market.json' \
+            -o -name '*-market.json.tmp' \
+            -o -name '*-chart-*d.json' \
+            -o -name '*-chart-*d.json.tmp' \
+            -o -name 'market.json' \
+            -o -name 'market.json.tmp' \
+            -o -name 'chart-*d.json' \
             -o -name 'chart-*d.json.tmp' \
         \) \
         -delete
@@ -916,7 +1122,7 @@ make_wallpaper() {
         -fill "$WHITE" \
         -font DejaVu-Sans \
         -pointsize "$title_size" \
-        -annotate "+0+${title_offset}" "BITCOIN" \
+        -annotate "+0+${title_offset}" "$COIN_NAME" \
         -gravity center \
         -fill "$WHITE" \
         -font DejaVu-Sans \
@@ -937,6 +1143,8 @@ make_wallpaper() {
         "$OUTPUT"
 
     printf 'Wallpaper saved to %s\n' "$OUTPUT"
+    printf 'Coin: %s (%s)\n' "$COIN_NAME" "$COIN"
+    printf 'Currency: %s (%s)\n' "$CURRENCY" "$currency_symbol"
     printf 'Resolution: %sx%s\n' "$SCREEN_WIDTH" "$SCREEN_HEIGHT"
 }
 
@@ -1038,9 +1246,6 @@ try_xfce() {
         return 1
     fi
 
-    #
-    # Try existing XFCE wallpaper properties.
-    #
     while IFS= read -r property; do
         [[ -z "$property" ]] && continue
 
@@ -1062,9 +1267,6 @@ try_xfce() {
         return 0
     fi
 
-    #
-    # Fresh XFCE profile.
-    #
     if command -v xrandr >/dev/null 2>&1; then
         monitor="$(
             xrandr --query 2>/dev/null |
@@ -1419,7 +1621,7 @@ set_wallpaper_backend() {
     fi
 
     #
-    # Generic Wayland fallback
+    # Generic Wayland
     #
     if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
         if try_swww; then
@@ -1432,7 +1634,7 @@ set_wallpaper_backend() {
     fi
 
     #
-    # Generic X11 fallback
+    # Generic X11
     #
     if command -v feh >/dev/null 2>&1; then
         if feh --bg-fill "$OUTPUT"; then
@@ -1485,6 +1687,8 @@ run_wallpaper() {
     update_label="$(format_update_time "$update_seconds")"
 
     echo "Starting cryptopaper..."
+    echo "Coin: $COIN_NAME ($COIN)"
+    echo "Currency: $CURRENCY ($(get_currency_symbol))"
     echo "Range: $RANGE_LABEL"
     echo "Updating every $update_label."
     echo "Press Ctrl+C to stop."
@@ -1510,37 +1714,54 @@ show_help() {
     echo "cryptopaper"
     echo
     echo "Usage:"
-    echo "  ./cryptopaper price"
-    echo "  ./cryptopaper set [days]"
-    echo "  ./cryptopaper run [days] [update-time]"
+    echo "  ./cryptopaper price [coin]"
+    echo "  ./cryptopaper set [coin] [days]"
+    echo "  ./cryptopaper run [coin] [days] [update-time]"
     echo "  ./cryptopaper cur USD|EUR|GBP"
     echo "  ./cryptopaper info"
     echo "  ./cryptopaper cache"
     echo "  ./cryptopaper clear-cache"
     echo
+    echo "Supported coins:"
+    echo "  btc   Bitcoin"
+    echo "  eth   Ethereum"
+    echo "  sol   Solana"
+    echo "  doge  Dogecoin"
+    echo "  xmr   Monero"
+    echo "  bnb   BNB"
+    echo "  xrp   XRP"
+    echo
+    echo "Supported currencies:"
+    echo "  USD   US Dollar"
+    echo "  EUR   Euro"
+    echo "  GBP   British Pound"
+    echo
     echo "Commands:"
-    echo "  price        Show the current Bitcoin price"
+    echo "  price        Show the current cryptocurrency price"
     echo "  set          Generate and set the wallpaper once"
     echo "  run          Keep the wallpaper automatically updated"
-    echo "  cur          Set the persistent display currency"
-    echo "  info         Show detected resolution and wallpaper backend"
+    echo "  cur          Set the persistent fiat currency"
+    echo "  info         Show detected resolution, backend, and currency"
     echo "  cache        Show cached API data"
     echo "  clear-cache  Remove cached API data"
     echo
     echo "Examples:"
     echo "  ./cryptopaper price"
+    echo "  ./cryptopaper price eth"
     echo "  ./cryptopaper set"
-    echo "  ./cryptopaper set 7d"
-    echo "  ./cryptopaper run"
-    echo "  ./cryptopaper run 7d"
-    echo "  ./cryptopaper run 1d 30s"
-    echo "  ./cryptopaper run 7d 5m"
+    echo "  ./cryptopaper set eth"
+    echo "  ./cryptopaper set sol 7d"
+    echo "  ./cryptopaper run doge 30d 5m"
     echo "  ./cryptopaper cur EUR"
     echo "  ./cryptopaper cur GBP"
     echo "  ./cryptopaper cur USD"
     echo "  ./cryptopaper info"
     echo "  ./cryptopaper cache"
     echo "  ./cryptopaper clear-cache"
+    echo
+    echo "Old Bitcoin-only syntax still works:"
+    echo "  ./cryptopaper set 7d"
+    echo "  ./cryptopaper run 7d 5m"
     echo
     echo "Time range:"
     echo "  1d, 7d, 16d, 30d, etc."
@@ -1550,17 +1771,20 @@ show_help() {
     echo "  m = minutes"
     echo "  h = hours"
     echo
-    echo "Default currency: USD"
-    echo "Default range: 1d"
-    echo "Default update time: 2m"
-    echo "Screen resolution: automatically detected"
-    echo "Wallpaper backend: automatically detected"
+    echo "Defaults:"
+    echo "  Coin: btc"
+    echo "  Currency: USD"
+    echo "  Range: 1d"
+    echo "  Update time: 2m"
+    echo "  Screen resolution: automatically detected"
+    echo "  Wallpaper backend: automatically detected"
     echo
     echo "Press Ctrl+C to stop the run command."
 }
 
 
 load_currency
+parse_cli_args "$@"
 validate_args "$@"
 
 case "$COMMAND" in
