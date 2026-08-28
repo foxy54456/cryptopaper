@@ -7,7 +7,7 @@ PRICE_API="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currenci
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cryptopaper"
 MARKET_CACHE="$CACHE_DIR/market.json"
 PRICE_CACHE_SECONDS=120
-CHART_CACHE_SECONDS=300
+CHART_CACHE_SECONDS=240
 
 OUTPUT="$CACHE_DIR/wallpaper-$(date +%s).png"
 
