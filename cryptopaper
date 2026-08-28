@@ -2,12 +2,8 @@
 
 set -euo pipefail
 
-PRICE_API="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cryptopaper"
-MARKET_CACHE="$CACHE_DIR/market.json"
-PRICE_CACHE_SECONDS=120
-CHART_CACHE_SECONDS=240
+CHART_CACHE_SECONDS=120
 
 OUTPUT="$CACHE_DIR/wallpaper-$(date +%s).png"
 
@@ -30,83 +26,11 @@ get_days() {
     fi
 }
 
-get_market_json() {
-    mkdir -p "$CACHE_DIR"
-
-    if [[ -f "$MARKET_CACHE" ]]; then
-        local age
-        age=$(( $(date +%s) - $(stat -c %Y "$MARKET_CACHE") ))
-
-        if (( age < PRICE_CACHE_SECONDS )); then
-            cat "$MARKET_CACHE"
-            return
-        fi
-    fi
-
-    if curl -fsS "$PRICE_API" -o "$MARKET_CACHE.tmp"; then
-        mv "$MARKET_CACHE.tmp" "$MARKET_CACHE"
-        cat "$MARKET_CACHE"
-    elif [[ -f "$MARKET_CACHE" ]]; then
-        echo "API unavailable, using cached price data." >&2
-        cat "$MARKET_CACHE"
-    else
-        rm -f "$MARKET_CACHE.tmp"
-        echo "Could not fetch Bitcoin market data." >&2
-        return 1
-    fi
-}
-
-get_price() {
-    local response
-    local price
-
-    response="$(get_market_json)" || {
-        echo "Could not fetch Bitcoin price." >&2
-        exit 1
-    }
-
-    price="$(printf '%s' "$response" | jq -r '.bitcoin.usd // empty')"
-
-    if [[ -z "$price" ]]; then
-        echo "Could not get Bitcoin price." >&2
-        exit 1
-    fi
-
-    printf '%s\n' "$price"
-}
-
-get_range_change() {
-    local -a prices
-    local first_price
-    local last_price
-
-    mapfile -t prices < <(get_chart_data)
-
-    if (( ${#prices[@]} < 2 )); then
-        echo "Could not calculate price change." >&2
-        return 1
-    fi
-
-    first_price="${prices[0]}"
-    last_price="${prices[$((${#prices[@]} - 1))]}"
-
-    awk \
-        -v first="$first_price" \
-        -v last="$last_price" \
-        'BEGIN {
-            if (first == 0) {
-                exit 1
-            }
-
-            print ((last - first) / first) * 100
-        }'
-}
-
-get_chart_data() {
+get_chart_file() {
     local days
-    local count
     local chart_cache
     local age
+    local count
 
     days="$(get_days)"
     chart_cache="$CACHE_DIR/chart-${days}d.json"
@@ -117,7 +41,7 @@ get_chart_data() {
         age=$(( $(date +%s) - $(stat -c %Y "$chart_cache") ))
 
         if (( age < CHART_CACHE_SECONDS )); then
-            jq -r '.prices[][1]' "$chart_cache"
+            printf '%s\n' "$chart_cache"
             return
         fi
     fi
@@ -130,7 +54,7 @@ get_chart_data() {
 
         if [[ "$count" =~ ^[0-9]+$ ]] && (( count >= 2 )); then
             mv "$chart_cache.tmp" "$chart_cache"
-            jq -r '.prices[][1]' "$chart_cache"
+            printf '%s\n' "$chart_cache"
             return
         fi
 
@@ -138,13 +62,59 @@ get_chart_data() {
     fi
 
     if [[ -f "$chart_cache" ]]; then
-        echo "API unavailable, using cached ${days}d graph." >&2
-        jq -r '.prices[][1]' "$chart_cache"
+        echo "API unavailable, using cached ${days}d data." >&2
+        printf '%s\n' "$chart_cache"
         return
     fi
 
     echo "Could not fetch chart data." >&2
     return 1
+}
+
+get_chart_data() {
+    local chart_file
+
+    chart_file="$(get_chart_file)" || return 1
+
+    jq -r '.prices[][1]' "$chart_file"
+}
+
+get_price() {
+    local chart_file
+    local price
+
+    chart_file="$(get_chart_file)" || return 1
+
+    price="$(jq -r '.prices[-1][1] // empty' "$chart_file")"
+
+    if [[ -z "$price" ]]; then
+        echo "Could not get Bitcoin price." >&2
+        return 1
+    fi
+
+    printf '%.2f\n' "$price"
+}
+
+get_range_change() {
+    local chart_file
+    local first_price
+    local last_price
+
+    chart_file="$(get_chart_file)" || return 1
+
+    first_price="$(jq -r '.prices[0][1]' "$chart_file")"
+    last_price="$(jq -r '.prices[-1][1]' "$chart_file")"
+
+    awk \
+        -v first="$first_price" \
+        -v last="$last_price" \
+        'BEGIN {
+            if (first == 0) {
+                exit 1
+            }
+
+            print ((last - first) / first) * 100
+        }'
 }
 
 get_change_color() {
@@ -181,18 +151,23 @@ make_graph_draw_args() {
 
     local min
     local max
+
     local width=1400
     local height=260
     local start_x=260
     local start_y=660
+
     local count
     local i
+
     local price
     local prev_price
+
     local x1
     local x2
     local y1
     local y2
+
     local color
 
     mapfile -t prices < <(get_chart_data)
@@ -271,7 +246,6 @@ show_price() {
     local price
 
     price="$(get_price)"
-
     printf 'Bitcoin: $%s\n' "$price"
 }
 
@@ -363,6 +337,7 @@ show_help() {
     echo "  ./cryptopaper set 90d"
     echo
     echo "Default range: 1d"
+    echo "Data refresh: every 2 minutes"
 }
 
 case "${1:-help}" in

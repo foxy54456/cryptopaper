@@ -81,9 +81,7 @@ Cryptopaper stores API data in:
 ~/.cache/cryptopaper/
 ```
 
-Current price data is refreshed every 2 minutes.
-
-Historical chart data is refreshed every 5 minutes.
+Price data is refreshed every 2 minutes.
 
 If CoinGecko is temporarily unavailable or rate-limited, Cryptopaper will reuse cached data when possible.
 
