@@ -12,6 +12,8 @@ A lightweight Bash script that displays the current Bitcoin price and price hist
 - Custom refresh intervals such as `30s`, `2m`, `10m`, or `1h`
 - Separate price and chart caching to reduce API calls and avoid rate limits
 - Cached-data fallback when the API is temporarily unavailable
+- Automatic screen resolution detection
+- Wallpaper layout scales to the detected screen resolution
 - KDE Plasma wallpaper support
 - Lightweight Bash implementation
 
@@ -23,6 +25,7 @@ A lightweight Bash script that displays the current Bitcoin price and price hist
 - ImageMagick
 - awk
 - KDE Plasma (`plasma-apply-wallpaperimage`)
+- `kscreen-doctor` for automatic screen resolution detection
 
 ### NixOS / Home Manager
 
@@ -123,6 +126,56 @@ uses a 7-day graph and refreshes the wallpaper every 5 minutes.
 
 Press `Ctrl+C` to stop automatic updates.
 
+### Cache commands
+
+Show currently cached API data:
+
+```bash
+./cryptopaper cache
+```
+
+Clear cached API data:
+
+```bash
+./cryptopaper clear-cache
+```
+
+Generated wallpaper images are not removed by `clear-cache`.
+
+## Screen Resolution
+
+Cryptopaper automatically detects the current KDE Plasma screen resolution using `kscreen-doctor`.
+
+The wallpaper layout scales automatically based on the detected resolution, including:
+
+- text size
+- graph size
+- graph position
+- line thickness
+- spacing
+
+If screen detection fails, Cryptopaper falls back to:
+
+```text
+1920x1080
+```
+
+For testing, a resolution can be overridden temporarily with:
+
+```bash
+CRYPTOPAPER_RESOLUTION=2560x1440 ./cryptopaper set
+```
+
+For example:
+
+```bash
+CRYPTOPAPER_RESOLUTION=3840x2160 ./cryptopaper set
+CRYPTOPAPER_RESOLUTION=3440x1440 ./cryptopaper set
+CRYPTOPAPER_RESOLUTION=1366x768 ./cryptopaper set
+```
+
+The override only applies to that command and does not change the actual monitor resolution.
+
 ## Caching
 
 Cryptopaper stores API data in:
@@ -171,7 +224,7 @@ If CoinGecko is temporarily unavailable or rate-limited, Cryptopaper will reuse 
 
 - Only Bitcoin/USD is supported
 - Wallpaper setting currently supports KDE Plasma only
-- Wallpaper output is currently fixed at 1920x1080
+- Multi-monitor setups are not fully handled yet
 
 ## Data
 
