@@ -2,10 +2,13 @@
 
 set -euo pipefail
 
-PRICE_API="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
-CHART_API="https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"
+PRICE_API="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
 
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cryptopaper"
+MARKET_CACHE="$CACHE_DIR/market.json"
+PRICE_CACHE_SECONDS=120
+CHART_CACHE_SECONDS=300
+
 OUTPUT="$CACHE_DIR/wallpaper-$(date +%s).png"
 
 GREEN="#00c853"
@@ -14,57 +17,150 @@ WHITE="#ffffff"
 BACKGROUND="#090909"
 GRAY="#aaaaaa"
 
+TIME_RANGE="${2:-1d}"
+RANGE_LABEL="${TIME_RANGE^^}"
+
+get_days() {
+    if [[ "$TIME_RANGE" =~ ^([1-9][0-9]*)d$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        echo "Invalid time range: $TIME_RANGE" >&2
+        echo "Use something like: 1d, 7d, 16d, 30d" >&2
+        exit 1
+    fi
+}
+
 get_market_json() {
-    curl -sS "$PRICE_API"
+    mkdir -p "$CACHE_DIR"
+
+    if [[ -f "$MARKET_CACHE" ]]; then
+        local age
+        age=$(( $(date +%s) - $(stat -c %Y "$MARKET_CACHE") ))
+
+        if (( age < PRICE_CACHE_SECONDS )); then
+            cat "$MARKET_CACHE"
+            return
+        fi
+    fi
+
+    if curl -fsS "$PRICE_API" -o "$MARKET_CACHE.tmp"; then
+        mv "$MARKET_CACHE.tmp" "$MARKET_CACHE"
+        cat "$MARKET_CACHE"
+    elif [[ -f "$MARKET_CACHE" ]]; then
+        echo "API unavailable, using cached price data." >&2
+        cat "$MARKET_CACHE"
+    else
+        rm -f "$MARKET_CACHE.tmp"
+        echo "Could not fetch Bitcoin market data." >&2
+        return 1
+    fi
 }
 
 get_price() {
     local response
     local price
 
-    response="$(get_market_json)"
+    response="$(get_market_json)" || {
+        echo "Could not fetch Bitcoin price." >&2
+        exit 1
+    }
+
     price="$(printf '%s' "$response" | jq -r '.bitcoin.usd // empty')"
 
     if [[ -z "$price" ]]; then
-        echo "Could not get Bitcoin price."
+        echo "Could not get Bitcoin price." >&2
         exit 1
     fi
 
     printf '%s\n' "$price"
 }
 
-get_change() {
-    local response
-    local change
+get_range_change() {
+    local -a prices
+    local first_price
+    local last_price
 
-    response="$(get_market_json)"
-    change="$(printf '%s' "$response" | jq -r '.bitcoin.usd_24h_change // empty')"
+    mapfile -t prices < <(get_chart_data)
 
-    if [[ -z "$change" ]]; then
-        echo "Could not get 24h change."
-        exit 1
+    if (( ${#prices[@]} < 2 )); then
+        echo "Could not calculate price change." >&2
+        return 1
     fi
 
-    printf '%s\n' "$change"
+    first_price="${prices[0]}"
+    last_price="${prices[$((${#prices[@]} - 1))]}"
+
+    awk \
+        -v first="$first_price" \
+        -v last="$last_price" \
+        'BEGIN {
+            if (first == 0) {
+                exit 1
+            }
+
+            print ((last - first) / first) * 100
+        }'
 }
 
 get_chart_data() {
-    local response
+    local days
+    local count
+    local chart_cache
+    local age
 
-    response="$(curl -sS "$CHART_API")"
-    printf '%s' "$response" | jq -r '.prices[][1]' 2>/dev/null
+    days="$(get_days)"
+    chart_cache="$CACHE_DIR/chart-${days}d.json"
+
+    mkdir -p "$CACHE_DIR"
+
+    if [[ -f "$chart_cache" ]]; then
+        age=$(( $(date +%s) - $(stat -c %Y "$chart_cache") ))
+
+        if (( age < CHART_CACHE_SECONDS )); then
+            jq -r '.prices[][1]' "$chart_cache"
+            return
+        fi
+    fi
+
+    if curl -fsS \
+        "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=${days}" \
+        -o "$chart_cache.tmp"
+    then
+        count="$(jq '.prices | length' "$chart_cache.tmp")"
+
+        if [[ "$count" =~ ^[0-9]+$ ]] && (( count >= 2 )); then
+            mv "$chart_cache.tmp" "$chart_cache"
+            jq -r '.prices[][1]' "$chart_cache"
+            return
+        fi
+
+        rm -f "$chart_cache.tmp"
+    fi
+
+    if [[ -f "$chart_cache" ]]; then
+        echo "API unavailable, using cached ${days}d graph." >&2
+        jq -r '.prices[][1]' "$chart_cache"
+        return
+    fi
+
+    echo "Could not fetch chart data." >&2
+    return 1
 }
 
 get_change_color() {
     local change="$1"
 
-    awk -v change="$change" -v green="$GREEN" -v red="$RED" 'BEGIN {
-        if (change >= 0) {
-            print green
-        } else {
-            print red
-        }
-    }'
+    awk \
+        -v change="$change" \
+        -v green="$GREEN" \
+        -v red="$RED" \
+        'BEGIN {
+            if (change >= 0) {
+                print green
+            } else {
+                print red
+            }
+        }'
 }
 
 format_change() {
@@ -81,20 +177,26 @@ format_change() {
 
 make_graph_draw_args() {
     local -a prices
-    local -a args
-    local min max
+    local -a args=()
+
+    local min
+    local max
     local width=1400
     local height=260
     local start_x=260
-    local start_y=700
+    local start_y=660
     local count
     local i
     local price
     local prev_price
-    local x1 y1 x2 y2
+    local x1
+    local x2
+    local y1
+    local y2
     local color
 
     mapfile -t prices < <(get_chart_data)
+
     count="${#prices[@]}"
 
     if (( count < 2 )); then
@@ -140,13 +242,18 @@ make_graph_draw_args() {
         y2="$(price_to_y "$price")"
 
         color="$(
-            awk -v curr="$price" -v prev="$prev_price" -v green="$GREEN" -v red="$RED" 'BEGIN {
-                if (curr >= prev) {
-                    print green
-                } else {
-                    print red
-                }
-            }'
+            awk \
+                -v curr="$price" \
+                -v prev="$prev_price" \
+                -v green="$GREEN" \
+                -v red="$RED" \
+                'BEGIN {
+                    if (curr >= prev) {
+                        print green
+                    } else {
+                        print red
+                    }
+                }'
         )"
 
         args+=(
@@ -162,7 +269,9 @@ make_graph_draw_args() {
 
 show_price() {
     local price
+
     price="$(get_price)"
+
     printf 'Bitcoin: $%s\n' "$price"
 }
 
@@ -171,19 +280,22 @@ make_wallpaper() {
     local change
     local change_text
     local change_color
+
     local -a graph_args
 
     price="$(get_price)"
-    change="$(get_change)"
+    change="$(get_range_change)"
     change_text="$(format_change "$change")"
     change_color="$(get_change_color "$change")"
 
     mkdir -p "$CACHE_DIR"
 
-    mapfile -d '' -t graph_args < <(make_graph_draw_args) || {
-        echo "Could not get chart data."
+    mapfile -d '' -t graph_args < <(make_graph_draw_args)
+
+    if (( ${#graph_args[@]} == 0 )); then
+        echo "Could not generate graph." >&2
         exit 1
-    }
+    fi
 
     magick \
         -size 1920x1080 \
@@ -209,7 +321,7 @@ make_wallpaper() {
         -stroke none \
         -font DejaVu-Sans \
         -pointsize 28 \
-        -annotate +0+110 "24H" \
+        -annotate +0+110 "$RANGE_LABEL" \
         "$OUTPUT"
 
     printf 'Wallpaper saved to %s\n' "$OUTPUT"
@@ -219,8 +331,8 @@ set_wallpaper() {
     make_wallpaper
 
     if ! command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
-        echo "Could not find plasma-apply-wallpaperimage."
-        echo "This version currently supports KDE Plasma."
+        echo "Could not find plasma-apply-wallpaperimage." >&2
+        echo "This version currently supports KDE Plasma." >&2
         exit 1
     fi
 
@@ -239,24 +351,36 @@ show_help() {
     echo "cryptopaper"
     echo
     echo "Usage:"
-    echo "  ./cryptopaper price    Show current Bitcoin price"
-    echo "  ./cryptopaper set      Generate and set wallpaper"
-    echo "  ./cryptopaper help     Show this help"
+    echo "  ./cryptopaper price"
+    echo "  ./cryptopaper set [days]"
+    echo
+    echo "Examples:"
+    echo "  ./cryptopaper set"
+    echo "  ./cryptopaper set 1d"
+    echo "  ./cryptopaper set 7d"
+    echo "  ./cryptopaper set 16d"
+    echo "  ./cryptopaper set 30d"
+    echo "  ./cryptopaper set 90d"
+    echo
+    echo "Default range: 1d"
 }
 
 case "${1:-help}" in
     price)
         show_price
         ;;
+
     set)
         set_wallpaper
         ;;
+
     help|--help|-h)
         show_help
         ;;
+
     *)
         echo "Unknown command: $1" >&2
-        echo "Run './cryptopaper help' for usage."
+        echo "Run './cryptopaper help' for usage." >&2
         exit 1
         ;;
 esac
