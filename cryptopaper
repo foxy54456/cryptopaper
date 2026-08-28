@@ -2,53 +2,214 @@
 
 set -euo pipefail
 
-API="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+PRICE_API="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
+CHART_API="https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"
+
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cryptopaper"
 OUTPUT="$CACHE_DIR/wallpaper-$(date +%s).png"
+
+GREEN="#00c853"
+RED="#ff5252"
+WHITE="#ffffff"
+BACKGROUND="#090909"
+GRAY="#aaaaaa"
+
+get_market_json() {
+    curl -sS "$PRICE_API"
+}
 
 get_price() {
     local response
     local price
 
-    response="$(curl -sS "$API")"
+    response="$(get_market_json)"
     price="$(printf '%s' "$response" | jq -r '.bitcoin.usd // empty')"
 
     if [[ -z "$price" ]]; then
         echo "Could not get Bitcoin price."
-        echo "You may have hit the API rate limit. Try again later."
         exit 1
     fi
 
     printf '%s\n' "$price"
 }
 
+get_change() {
+    local response
+    local change
+
+    response="$(get_market_json)"
+    change="$(printf '%s' "$response" | jq -r '.bitcoin.usd_24h_change // empty')"
+
+    if [[ -z "$change" ]]; then
+        echo "Could not get 24h change."
+        exit 1
+    fi
+
+    printf '%s\n' "$change"
+}
+
+get_chart_data() {
+    local response
+
+    response="$(curl -sS "$CHART_API")"
+    printf '%s' "$response" | jq -r '.prices[][1]' 2>/dev/null
+}
+
+get_change_color() {
+    local change="$1"
+
+    awk -v change="$change" -v green="$GREEN" -v red="$RED" 'BEGIN {
+        if (change >= 0) {
+            print green
+        } else {
+            print red
+        }
+    }'
+}
+
+format_change() {
+    local change="$1"
+
+    awk -v change="$change" 'BEGIN {
+        if (change >= 0) {
+            printf "+%.2f%%\n", change
+        } else {
+            printf "%.2f%%\n", change
+        }
+    }'
+}
+
+make_graph_draw_args() {
+    local -a prices
+    local -a args
+    local min max
+    local width=1400
+    local height=260
+    local start_x=260
+    local start_y=700
+    local count
+    local i
+    local price
+    local prev_price
+    local x1 y1 x2 y2
+    local color
+
+    mapfile -t prices < <(get_chart_data)
+    count="${#prices[@]}"
+
+    if (( count < 2 )); then
+        return 1
+    fi
+
+    min="$(
+        printf '%s\n' "${prices[@]}" |
+        sort -n |
+        head -n 1
+    )"
+
+    max="$(
+        printf '%s\n' "${prices[@]}" |
+        sort -n |
+        tail -n 1
+    )"
+
+    price_to_y() {
+        awk \
+            -v price="$1" \
+            -v min="$min" \
+            -v max="$max" \
+            -v start="$start_y" \
+            -v height="$height" \
+            'BEGIN {
+                if (max == min) {
+                    print start
+                } else {
+                    print int(start + height - ((price - min) / (max - min) * height))
+                }
+            }'
+    }
+
+    for (( i=1; i<count; i++ )); do
+        prev_price="${prices[$((i - 1))]}"
+        price="${prices[$i]}"
+
+        x1=$(( start_x + ((i - 1) * width / (count - 1)) ))
+        x2=$(( start_x + (i * width / (count - 1)) ))
+
+        y1="$(price_to_y "$prev_price")"
+        y2="$(price_to_y "$price")"
+
+        color="$(
+            awk -v curr="$price" -v prev="$prev_price" -v green="$GREEN" -v red="$RED" 'BEGIN {
+                if (curr >= prev) {
+                    print green
+                } else {
+                    print red
+                }
+            }'
+        )"
+
+        args+=(
+            -stroke "$color"
+            -strokewidth 4
+            -fill none
+            -draw "line ${x1},${y1} ${x2},${y2}"
+        )
+    done
+
+    printf '%s\0' "${args[@]}"
+}
+
 show_price() {
     local price
-
     price="$(get_price)"
     printf 'Bitcoin: $%s\n' "$price"
 }
 
 make_wallpaper() {
     local price
+    local change
+    local change_text
+    local change_color
+    local -a graph_args
 
     price="$(get_price)"
+    change="$(get_change)"
+    change_text="$(format_change "$change")"
+    change_color="$(get_change_color "$change")"
 
     mkdir -p "$CACHE_DIR"
 
+    mapfile -d '' -t graph_args < <(make_graph_draw_args) || {
+        echo "Could not get chart data."
+        exit 1
+    }
+
     magick \
         -size 1920x1080 \
-        xc:"#090909" \
+        "xc:${BACKGROUND}" \
         -gravity north \
-        -fill white \
+        -fill "$WHITE" \
         -font DejaVu-Sans \
         -pointsize 48 \
         -annotate +0+120 "BITCOIN" \
         -gravity center \
-        -fill white \
+        -fill "$WHITE" \
         -font DejaVu-Sans \
         -pointsize 140 \
-        -annotate +0-20 "\$${price}" \
+        -annotate +0-200 "\$${price}" \
+        -gravity center \
+        -fill "$change_color" \
+        -font DejaVu-Sans \
+        -pointsize 48 \
+        -annotate +0-90 "$change_text" \
+        "${graph_args[@]}" \
+        -gravity south \
+        -fill "$GRAY" \
+        -stroke none \
+        -font DejaVu-Sans \
+        -pointsize 28 \
+        -annotate +0+110 "24H" \
         "$OUTPUT"
 
     printf 'Wallpaper saved to %s\n' "$OUTPUT"
@@ -79,7 +240,6 @@ show_help() {
     echo
     echo "Usage:"
     echo "  ./cryptopaper price    Show current Bitcoin price"
-    echo "  ./cryptopaper render   Generate wallpaper image"
     echo "  ./cryptopaper set      Generate and set wallpaper"
     echo "  ./cryptopaper help     Show this help"
 }
@@ -87,9 +247,6 @@ show_help() {
 case "${1:-help}" in
     price)
         show_price
-        ;;
-    render)
-        make_wallpaper
         ;;
     set)
         set_wallpaper
