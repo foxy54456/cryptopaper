@@ -37,6 +37,23 @@ UPDATE_TIME="$DEFAULT_UPDATE_TIME"
 RANGE_LABEL="1D"
 
 
+check_dependencies() {
+    local -a missing=()
+    local cmd
+
+    for cmd in bash curl jq magick awk stat sort head find timeout mktemp; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing+=("$cmd")
+        fi
+    done
+
+    if (( ${#missing[@]} > 0 )); then
+        echo "cryptopaper: missing required dependencies:" >&2
+        printf '  %s\n' "${missing[@]}" >&2
+        return 1
+    fi
+}
+
 load_currency() {
     local value=""
 
@@ -159,7 +176,7 @@ parse_cli_args() {
     case "$COMMAND" in
         price)
             if (( $# > 2 )); then
-                echo "Usage: ./cryptopaper price [coin]" >&2
+                echo "Usage: cryptopaper price [coin]" >&2
                 exit 1
             fi
 
@@ -172,7 +189,7 @@ parse_cli_args() {
 
         set)
             if (( $# > 3 )); then
-                echo "Usage: ./cryptopaper set [coin] [days]" >&2
+                echo "Usage: cryptopaper set [coin] [days]" >&2
                 exit 1
             fi
 
@@ -195,7 +212,7 @@ parse_cli_args() {
 
         run)
             if (( $# > 4 )); then
-                echo "Usage: ./cryptopaper run [coin] [days] [update-time]" >&2
+                echo "Usage: cryptopaper run [coin] [days] [update-time]" >&2
                 exit 1
             fi
 
@@ -229,7 +246,7 @@ parse_cli_args() {
 
         cur)
             if (( $# != 2 )); then
-                echo "Usage: ./cryptopaper cur USD|EUR|GBP" >&2
+                echo "Usage: cryptopaper cur USD|EUR|GBP" >&2
                 exit 1
             fi
 
@@ -238,7 +255,7 @@ parse_cli_args() {
 
         cache|clear-cache|info)
             if (( $# != 1 )); then
-                echo "Usage: ./cryptopaper $COMMAND" >&2
+                echo "Usage: cryptopaper $COMMAND" >&2
                 exit 1
             fi
 
@@ -635,6 +652,8 @@ get_price_json() {
     local api_currency
     local price_api
     local price_cache
+    local tmp_file
+    local http_code
 
     api_currency="$(get_currency_api_code)"
 
@@ -646,39 +665,60 @@ get_price_json() {
     mkdir -p "$CACHE_DIR"
 
     if [[ -f "$price_cache" ]]; then
-        age=$(( $(date +%s) - $(stat -c %Y "$price_cache") ))
+        if ! jq -e --arg coin "$COIN_ID" --arg cur "$api_currency" '.[$coin][$cur] | numbers' "$price_cache" >/dev/null 2>&1; then
+            echo "Ignoring invalid cached price data: $(basename "$price_cache")" >&2
+            rm -f "$price_cache"
+        else
+            age=$(( $(date +%s) - $(stat -c %Y "$price_cache") ))
 
-        if (( age < cache_seconds )); then
-            cat "$price_cache"
-            return
+            if (( age < cache_seconds )); then
+                cat "$price_cache"
+                return
+            fi
         fi
     fi
 
-    if curl \
-        --connect-timeout 10 \
-        --max-time 20 \
-        -fsS \
-        "$price_api" \
-        -o "$price_cache.tmp"
+    tmp_file="$(mktemp "${price_cache}.tmp.XXXXXX")" || return 1
+
+    http_code="$(
+        curl \
+            --connect-timeout 10 \
+            --max-time 20 \
+            -sS \
+            -w '%{http_code}' \
+            "$price_api" \
+            -o "$tmp_file" \
+            2>/dev/null || true
+    )"
+
+    if [[ "$http_code" == "200" ]] &&
+       jq \
+           -e \
+           --arg coin "$COIN_ID" \
+           --arg cur "$api_currency" \
+           '.[$coin][$cur] | numbers' \
+           "$tmp_file" \
+           >/dev/null 2>&1
     then
-        if jq \
-            -e \
-            --arg coin "$COIN_ID" \
-            --arg cur "$api_currency" \
-            '.[$coin][$cur]' \
-            "$price_cache.tmp" \
-            >/dev/null 2>&1
-        then
-            mv "$price_cache.tmp" "$price_cache"
-            cat "$price_cache"
-            return
-        fi
-
-        rm -f "$price_cache.tmp"
+        mv -f "$tmp_file" "$price_cache"
+        cat "$price_cache"
+        return
     fi
 
-    if [[ -f "$price_cache" ]]; then
-        echo "Price API unavailable, using cached $COIN $CURRENCY data." >&2
+    rm -f "$tmp_file"
+
+    if [[ "$http_code" == "429" ]]; then
+        echo "CoinGecko rate limit reached." >&2
+    elif [[ -n "$http_code" && "$http_code" != "000" ]]; then
+        echo "CoinGecko price request failed with HTTP $http_code." >&2
+    else
+        echo "CoinGecko price request failed." >&2
+    fi
+
+    if [[ -f "$price_cache" ]] &&
+       jq -e --arg coin "$COIN_ID" --arg cur "$api_currency" '.[$coin][$cur] | numbers' "$price_cache" >/dev/null 2>&1
+    then
+        echo "Using cached $COIN $CURRENCY price data." >&2
         cat "$price_cache"
         return
     fi
@@ -733,6 +773,8 @@ get_chart_file() {
     local age
     local count
     local api_currency
+    local tmp_file
+    local http_code
 
     days="$(get_days)"
     api_currency="$(get_currency_api_code)"
@@ -743,36 +785,61 @@ get_chart_file() {
     mkdir -p "$CACHE_DIR"
 
     if [[ -f "$chart_cache" ]]; then
-        age=$(( $(date +%s) - $(stat -c %Y "$chart_cache") ))
-
-        if (( age < cache_seconds )); then
-            printf '%s\n' "$chart_cache"
-            return
-        fi
-    fi
-
-    if curl \
-        --connect-timeout 10 \
-        --max-time 20 \
-        -fsS \
-        "https://api.coingecko.com/api/v3/coins/${COIN_ID}/market_chart?vs_currency=${api_currency}&days=${days}" \
-        -o "$chart_cache.tmp"
-    then
-        count="$(jq '.prices | length' "$chart_cache.tmp")"
-
-        if [[ "$count" =~ ^[0-9]+$ ]] &&
-           (( count >= 2 ))
+        if ! count="$(jq -er '.prices | arrays | length' "$chart_cache" 2>/dev/null)" ||
+           [[ ! "$count" =~ ^[0-9]+$ ]] ||
+           (( count < 2 ))
         then
-            mv "$chart_cache.tmp" "$chart_cache"
-            printf '%s\n' "$chart_cache"
-            return
-        fi
+            echo "Ignoring invalid cached chart data: $(basename "$chart_cache")" >&2
+            rm -f "$chart_cache"
+        else
+            age=$(( $(date +%s) - $(stat -c %Y "$chart_cache") ))
 
-        rm -f "$chart_cache.tmp"
+            if (( age < cache_seconds )); then
+                printf '%s\n' "$chart_cache"
+                return
+            fi
+        fi
     fi
 
-    if [[ -f "$chart_cache" ]]; then
-        echo "Chart API unavailable, using cached $COIN ${days}d $CURRENCY data." >&2
+    tmp_file="$(mktemp "${chart_cache}.tmp.XXXXXX")" || return 1
+
+    http_code="$(
+        curl \
+            --connect-timeout 10 \
+            --max-time 20 \
+            -sS \
+            -w '%{http_code}' \
+            "https://api.coingecko.com/api/v3/coins/${COIN_ID}/market_chart?vs_currency=${api_currency}&days=${days}" \
+            -o "$tmp_file" \
+            2>/dev/null || true
+    )"
+
+    if [[ "$http_code" == "200" ]] &&
+       count="$(jq -er '.prices | arrays | length' "$tmp_file" 2>/dev/null)" &&
+       [[ "$count" =~ ^[0-9]+$ ]] &&
+       (( count >= 2 ))
+    then
+        mv -f "$tmp_file" "$chart_cache"
+        printf '%s\n' "$chart_cache"
+        return
+    fi
+
+    rm -f "$tmp_file"
+
+    if [[ "$http_code" == "429" ]]; then
+        echo "CoinGecko rate limit reached." >&2
+    elif [[ -n "$http_code" && "$http_code" != "000" ]]; then
+        echo "CoinGecko chart request failed with HTTP $http_code." >&2
+    else
+        echo "CoinGecko chart request failed." >&2
+    fi
+
+    if [[ -f "$chart_cache" ]] &&
+       count="$(jq -er '.prices | arrays | length' "$chart_cache" 2>/dev/null)" &&
+       [[ "$count" =~ ^[0-9]+$ ]] &&
+       (( count >= 2 ))
+    then
+        echo "Using cached $COIN ${days}d $CURRENCY chart data." >&2
         printf '%s\n' "$chart_cache"
         return
     fi
@@ -1046,21 +1113,48 @@ clear_cache() {
         -type f \
         \( \
             -name '*-market-*.json' \
-            -o -name '*-market-*.json.tmp' \
+            -o -name '*-market-*.json.tmp*' \
             -o -name '*-chart-*d-*.json' \
-            -o -name '*-chart-*d-*.json.tmp' \
+            -o -name '*-chart-*d-*.json.tmp*' \
             -o -name '*-market.json' \
-            -o -name '*-market.json.tmp' \
+            -o -name '*-market.json.tmp*' \
             -o -name '*-chart-*d.json' \
-            -o -name '*-chart-*d.json.tmp' \
+            -o -name '*-chart-*d.json.tmp*' \
             -o -name 'market.json' \
-            -o -name 'market.json.tmp' \
+            -o -name 'market.json.tmp*' \
             -o -name 'chart-*d.json' \
-            -o -name 'chart-*d.json.tmp' \
+            -o -name 'chart-*d.json.tmp*' \
         \) \
         -delete
 
     echo "Cryptopaper API cache cleared."
+}
+
+
+get_font_name() {
+    local requested="${CRYPTOPAPER_FONT:-DejaVu-Sans}"
+    local fallback
+
+    if magick -list font 2>/dev/null |
+       awk -F': ' -v wanted="$requested" '$1 ~ /^[[:space:]]*Font$/ && $2 == wanted { found=1 } END { exit !found }'
+    then
+        printf '%s\n' "$requested"
+        return
+    fi
+
+    fallback="$(
+        magick -list font 2>/dev/null |
+        awk -F': ' '$1 ~ /^[[:space:]]*Font$/ { print $2; exit }'
+    )"
+
+    if [[ -n "$fallback" ]]; then
+        echo "Font '$requested' not found; using '$fallback'." >&2
+        printf '%s\n' "$fallback"
+        return
+    fi
+
+    echo "cryptopaper: ImageMagick could not find any usable fonts." >&2
+    return 1
 }
 
 
@@ -1072,6 +1166,7 @@ make_wallpaper() {
     local change_text
     local change_color
     local currency_symbol
+    local font_name
 
     local title_size
     local price_size
@@ -1087,7 +1182,7 @@ make_wallpaper() {
 
     get_screen_dimensions
 
-    OUTPUT="$CACHE_DIR/wallpaper-$(date +%s).png"
+    OUTPUT="$CACHE_DIR/wallpaper-$(date +%s%N)-$$.png"
 
     price="$(get_price "$mode")"
     change="$(get_range_change "$mode")"
@@ -1095,6 +1190,7 @@ make_wallpaper() {
     change_text="$(format_change "$change")"
     change_color="$(get_change_color "$change")"
     currency_symbol="$(get_currency_symbol)"
+    font_name="$(get_font_name)"
 
     mkdir -p "$CACHE_DIR"
 
@@ -1120,24 +1216,24 @@ make_wallpaper() {
         "xc:${BACKGROUND}" \
         -gravity north \
         -fill "$WHITE" \
-        -font DejaVu-Sans \
+        -font "$font_name" \
         -pointsize "$title_size" \
         -annotate "+0+${title_offset}" "$COIN_NAME" \
         -gravity center \
         -fill "$WHITE" \
-        -font DejaVu-Sans \
+        -font "$font_name" \
         -pointsize "$price_size" \
         -annotate "+0-${price_offset}" "${currency_symbol}${price}" \
         -gravity center \
         -fill "$change_color" \
-        -font DejaVu-Sans \
+        -font "$font_name" \
         -pointsize "$change_size" \
         -annotate "+0-${change_offset}" "$change_text" \
         "${graph_args[@]}" \
         -gravity south \
         -fill "$GRAY" \
         -stroke none \
-        -font DejaVu-Sans \
+        -font "$font_name" \
         -pointsize "$label_size" \
         -annotate "+0+${label_offset}" "$RANGE_LABEL" \
         "$OUTPUT"
@@ -1190,6 +1286,7 @@ try_swww() {
 
 stop_cryptopaper_swaybg() {
     local pid
+    local comm=""
 
     if [[ ! -f "$SWAYBG_PID_FILE" ]]; then
         return
@@ -1200,7 +1297,13 @@ stop_cryptopaper_swaybg() {
     if [[ "$pid" =~ ^[0-9]+$ ]] &&
        kill -0 "$pid" 2>/dev/null
     then
-        kill "$pid" 2>/dev/null || true
+        if [[ -r "/proc/$pid/comm" ]]; then
+            comm="$(cat "/proc/$pid/comm" 2>/dev/null || true)"
+        fi
+
+        if [[ "$comm" == "swaybg" ]]; then
+            kill "$pid" 2>/dev/null || true
+        fi
     fi
 
     rm -f "$SWAYBG_PID_FILE"
@@ -1288,6 +1391,13 @@ try_xfce() {
             ' |
             head -n 1
         )"
+    fi
+
+    if command -v xprop >/dev/null 2>&1; then
+        workspace="$(xprop -root _NET_CURRENT_DESKTOP 2>/dev/null | awk '{ print $3; exit }')"
+        if [[ ! "$workspace" =~ ^[0-9]+$ ]]; then
+            workspace="0"
+        fi
     fi
 
     if [[ -n "$monitor" ]]; then
@@ -1390,12 +1500,16 @@ get_wallpaper_backend_name() {
     if [[ "$desktop" == *"HYPRLAND"* ||
           -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]
     then
-        if command -v hyprpaper >/dev/null 2>&1; then
+        if command -v hyprctl >/dev/null 2>&1 &&
+           pgrep -x hyprpaper >/dev/null 2>&1
+        then
             echo "hyprpaper"
             return
         fi
 
-        if command -v swww >/dev/null 2>&1; then
+        if command -v swww >/dev/null 2>&1 &&
+           swww query >/dev/null 2>&1
+        then
             echo "swww"
             return
         fi
@@ -1421,7 +1535,9 @@ get_wallpaper_backend_name() {
     fi
 
     if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
-        if command -v swww >/dev/null 2>&1; then
+        if command -v swww >/dev/null 2>&1 &&
+           swww query >/dev/null 2>&1
+        then
             echo "swww"
             return
         fi
@@ -1463,100 +1579,63 @@ set_wallpaper_backend() {
     desktop="${XDG_CURRENT_DESKTOP:-}"
     desktop="${desktop^^}"
 
-    #
     # KDE Plasma
-    #
     if [[ "$desktop" == *"KDE"* || "$desktop" == *"PLASMA"* ]]; then
-        if command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
-            if plasma-apply-wallpaperimage "$OUTPUT"; then
-                echo "Wallpaper backend: KDE Plasma"
-                return 0
-            fi
+        if command -v plasma-apply-wallpaperimage >/dev/null 2>&1 &&
+           plasma-apply-wallpaperimage "$OUTPUT" >/dev/null 2>&1
+        then
+            echo "Wallpaper backend: KDE Plasma"
+            return 0
         fi
 
         echo "Could not set the KDE Plasma wallpaper." >&2
         return 1
     fi
 
-    #
     # GNOME
-    #
     if [[ "$desktop" == *"GNOME"* ]]; then
-        if command -v gsettings >/dev/null 2>&1; then
-            gsettings set \
-                org.gnome.desktop.background \
-                picture-uri \
-                "file://$OUTPUT"
-
-            gsettings set \
-                org.gnome.desktop.background \
-                picture-uri-dark \
-                "file://$OUTPUT" \
-                >/dev/null 2>&1 || true
-
-            gsettings set \
-                org.gnome.desktop.background \
-                picture-options \
-                "zoom" \
-                >/dev/null 2>&1 || true
-
+        if command -v gsettings >/dev/null 2>&1 &&
+           gsettings set org.gnome.desktop.background picture-uri "file://$OUTPUT" >/dev/null 2>&1
+        then
+            gsettings set org.gnome.desktop.background picture-uri-dark "file://$OUTPUT" >/dev/null 2>&1 || true
+            gsettings set org.gnome.desktop.background picture-options "zoom" >/dev/null 2>&1 || true
             echo "Wallpaper backend: GNOME"
             return 0
         fi
 
-        echo "Could not find gsettings for GNOME." >&2
+        echo "Could not set the GNOME wallpaper." >&2
         return 1
     fi
 
-    #
     # Cinnamon
-    #
     if [[ "$desktop" == *"CINNAMON"* ]]; then
-        if command -v gsettings >/dev/null 2>&1; then
-            gsettings set \
-                org.cinnamon.desktop.background \
-                picture-uri \
-                "file://$OUTPUT"
-
-            gsettings set \
-                org.cinnamon.desktop.background \
-                picture-options \
-                "scaled"
-
+        if command -v gsettings >/dev/null 2>&1 &&
+           gsettings set org.cinnamon.desktop.background picture-uri "file://$OUTPUT" >/dev/null 2>&1
+        then
+            gsettings set org.cinnamon.desktop.background picture-options "scaled" >/dev/null 2>&1 || true
             echo "Wallpaper backend: Cinnamon"
             return 0
         fi
 
-        echo "Could not find gsettings for Cinnamon." >&2
+        echo "Could not set the Cinnamon wallpaper." >&2
         return 1
     fi
 
-    #
     # MATE
-    #
     if [[ "$desktop" == *"MATE"* ]]; then
-        if command -v gsettings >/dev/null 2>&1; then
-            gsettings set \
-                org.mate.background \
-                picture-filename \
-                "$OUTPUT"
-
-            gsettings set \
-                org.mate.background \
-                picture-options \
-                "scaled"
-
+        if command -v gsettings >/dev/null 2>&1 &&
+           gsettings set org.mate.background picture-filename "$OUTPUT" >/dev/null 2>&1
+        then
+            gsettings set org.mate.background picture-options "scaled" >/dev/null 2>&1 || true
             echo "Wallpaper backend: MATE"
             return 0
         fi
 
-        echo "Could not find gsettings for MATE." >&2
+        echo "Could not set the MATE wallpaper." >&2
         return 1
     fi
 
-    #
     # XFCE
-    #
     if [[ "$desktop" == *"XFCE"* ]]; then
         if try_xfce; then
             return 0
@@ -1566,9 +1645,7 @@ set_wallpaper_backend() {
         return 1
     fi
 
-    #
     # LXQt
-    #
     if [[ "$desktop" == *"LXQT"* ]]; then
         if try_lxqt; then
             return 0
@@ -1578,21 +1655,9 @@ set_wallpaper_backend() {
         return 1
     fi
 
-    #
     # Hyprland
-    #
-    if [[ "$desktop" == *"HYPRLAND"* ||
-          -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]
-    then
-        if try_hyprpaper; then
-            return 0
-        fi
-
-        if try_swww; then
-            return 0
-        fi
-
-        if try_swaybg; then
+    if [[ "$desktop" == *"HYPRLAND"* || -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+        if try_hyprpaper || try_swww || try_swaybg; then
             return 0
         fi
 
@@ -1601,17 +1666,9 @@ set_wallpaper_backend() {
         return 1
     fi
 
-    #
     # Sway
-    #
-    if [[ "$desktop" == *"SWAY"* ||
-          -n "${SWAYSOCK:-}" ]]
-    then
-        if try_swaybg; then
-            return 0
-        fi
-
-        if try_swww; then
+    if [[ "$desktop" == *"SWAY"* || -n "${SWAYSOCK:-}" ]]; then
+        if try_swaybg || try_swww; then
             return 0
         fi
 
@@ -1620,27 +1677,19 @@ set_wallpaper_backend() {
         return 1
     fi
 
-    #
     # Generic Wayland
-    #
     if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
-        if try_swww; then
-            return 0
-        fi
-
-        if try_swaybg; then
+        if try_swww || try_swaybg; then
             return 0
         fi
     fi
 
-    #
     # Generic X11
-    #
-    if command -v feh >/dev/null 2>&1; then
-        if feh --bg-fill "$OUTPUT"; then
-            echo "Wallpaper backend: feh"
-            return 0
-        fi
+    if command -v feh >/dev/null 2>&1 &&
+       feh --bg-fill "$OUTPUT" >/dev/null 2>&1
+    then
+        echo "Wallpaper backend: feh"
+        return 0
     fi
 
     echo "No supported wallpaper backend found." >&2
@@ -1714,13 +1763,13 @@ show_help() {
     echo "cryptopaper"
     echo
     echo "Usage:"
-    echo "  ./cryptopaper price [coin]"
-    echo "  ./cryptopaper set [coin] [days]"
-    echo "  ./cryptopaper run [coin] [days] [update-time]"
-    echo "  ./cryptopaper cur USD|EUR|GBP"
-    echo "  ./cryptopaper info"
-    echo "  ./cryptopaper cache"
-    echo "  ./cryptopaper clear-cache"
+    echo "  cryptopaper price [coin]"
+    echo "  cryptopaper set [coin] [days]"
+    echo "  cryptopaper run [coin] [days] [update-time]"
+    echo "  cryptopaper cur USD|EUR|GBP"
+    echo "  cryptopaper info"
+    echo "  cryptopaper cache"
+    echo "  cryptopaper clear-cache"
     echo
     echo "Supported coins:"
     echo "  btc   Bitcoin"
@@ -1746,22 +1795,22 @@ show_help() {
     echo "  clear-cache  Remove cached API data"
     echo
     echo "Examples:"
-    echo "  ./cryptopaper price"
-    echo "  ./cryptopaper price eth"
-    echo "  ./cryptopaper set"
-    echo "  ./cryptopaper set eth"
-    echo "  ./cryptopaper set sol 7d"
-    echo "  ./cryptopaper run doge 30d 5m"
-    echo "  ./cryptopaper cur EUR"
-    echo "  ./cryptopaper cur GBP"
-    echo "  ./cryptopaper cur USD"
-    echo "  ./cryptopaper info"
-    echo "  ./cryptopaper cache"
-    echo "  ./cryptopaper clear-cache"
+    echo "  cryptopaper price"
+    echo "  cryptopaper price eth"
+    echo "  cryptopaper set"
+    echo "  cryptopaper set eth"
+    echo "  cryptopaper set sol 7d"
+    echo "  cryptopaper run doge 30d 5m"
+    echo "  cryptopaper cur EUR"
+    echo "  cryptopaper cur GBP"
+    echo "  cryptopaper cur USD"
+    echo "  cryptopaper info"
+    echo "  cryptopaper cache"
+    echo "  cryptopaper clear-cache"
     echo
     echo "Old Bitcoin-only syntax still works:"
-    echo "  ./cryptopaper set 7d"
-    echo "  ./cryptopaper run 7d 5m"
+    echo "  cryptopaper set 7d"
+    echo "  cryptopaper run 7d 5m"
     echo
     echo "Time range:"
     echo "  1d, 7d, 16d, 30d, etc."
@@ -1786,6 +1835,14 @@ show_help() {
 load_currency
 parse_cli_args "$@"
 validate_args "$@"
+
+case "$COMMAND" in
+    help|--help|-h|cur|clear-cache)
+        ;;
+    *)
+        check_dependencies || exit 1
+        ;;
+esac
 
 case "$COMMAND" in
     price)
@@ -1822,7 +1879,7 @@ case "$COMMAND" in
 
     *)
         echo "Unknown command: $COMMAND" >&2
-        echo "Run './cryptopaper help' for usage." >&2
+        echo "Run 'cryptopaper help' for usage." >&2
         exit 1
         ;;
 esac
