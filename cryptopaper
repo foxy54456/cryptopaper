@@ -2,9 +2,12 @@
 
 set -euo pipefail
 
-PRICE_API="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cryptopaper"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cryptopaper"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+DEFAULT_CURRENCY="USD"
+CURRENCY="$DEFAULT_CURRENCY"
 PRICE_CACHE="$CACHE_DIR/market.json"
 SWAYBG_PID_FILE="$CACHE_DIR/swaybg.pid"
 
@@ -29,6 +32,59 @@ BASE_HEIGHT=1080
 
 SCREEN_WIDTH="$BASE_WIDTH"
 SCREEN_HEIGHT="$BASE_HEIGHT"
+
+
+load_currency() {
+    local value=""
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        value="$(awk -F= '$1 == "currency" { print $2; exit }' "$CONFIG_FILE" 2>/dev/null || true)"
+        value="${value^^}"
+    fi
+
+    case "$value" in
+        USD|EUR|GBP) CURRENCY="$value" ;;
+        *) CURRENCY="$DEFAULT_CURRENCY" ;;
+    esac
+}
+
+
+get_currency_api_code() {
+    printf '%s\n' "${CURRENCY,,}"
+}
+
+
+get_currency_symbol() {
+    case "$CURRENCY" in
+        USD) printf '$\n' ;;
+        EUR) printf '€\n' ;;
+        GBP) printf '£\n' ;;
+    esac
+}
+
+
+set_currency() {
+    local value="${1:-}"
+    value="${value^^}"
+
+    case "$value" in
+        USD|EUR|GBP) ;;
+        *)
+            echo "Unsupported currency: ${value:-<empty>}" >&2
+            echo "Supported currencies: USD, EUR, GBP" >&2
+            return 1
+            ;;
+    esac
+
+    mkdir -p "$CONFIG_DIR"
+    printf 'currency=%s\n' "$value" > "$CONFIG_FILE"
+    CURRENCY="$value"
+
+    # Cached market/chart data is currency-specific, so clear it when switching.
+    clear_cache >/dev/null
+
+    echo "Currency set to $CURRENCY ($(get_currency_symbol))."
+}
 
 
 get_days() {
@@ -143,6 +199,13 @@ validate_args() {
 
             get_days >/dev/null || exit 1
             parse_update_time "$UPDATE_TIME" >/dev/null || exit 1
+            ;;
+
+        cur)
+            if (( $# != 2 )); then
+                echo "Usage: ./cryptopaper cur USD|EUR|GBP" >&2
+                exit 1
+            fi
             ;;
 
         cache|clear-cache|info)
@@ -419,6 +482,11 @@ get_price_json() {
     local mode="${1:-}"
     local cache_seconds
     local age
+    local api_currency
+    local price_api
+
+    api_currency="$(get_currency_api_code)"
+    price_api="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=${api_currency}"
 
     cache_seconds="$(get_cache_seconds "$mode")"
 
@@ -437,10 +505,10 @@ get_price_json() {
         --connect-timeout 10 \
         --max-time 20 \
         -fsS \
-        "$PRICE_API" \
+        "$price_api" \
         -o "$PRICE_CACHE.tmp"
     then
-        if jq -e '.bitcoin.usd' "$PRICE_CACHE.tmp" >/dev/null 2>&1; then
+        if jq -e --arg cur "$api_currency" '.bitcoin[$cur]' "$PRICE_CACHE.tmp" >/dev/null 2>&1; then
             mv "$PRICE_CACHE.tmp" "$PRICE_CACHE"
             cat "$PRICE_CACHE"
             return
@@ -464,10 +532,12 @@ get_price() {
     local mode="${1:-}"
     local response
     local price
+    local api_currency
 
+    api_currency="$(get_currency_api_code)"
     response="$(get_price_json "$mode")" || return 1
 
-    price="$(printf '%s' "$response" | jq -r '.bitcoin.usd // empty')"
+    price="$(printf '%s' "$response" | jq -r --arg cur "$api_currency" '.bitcoin[$cur] // empty')"
 
     if [[ -z "$price" ]]; then
         echo "Could not get Bitcoin price." >&2
@@ -488,7 +558,7 @@ get_chart_file() {
     local count
 
     days="$(get_days)"
-    chart_cache="$CACHE_DIR/chart-${days}d.json"
+    chart_cache="$CACHE_DIR/chart-${days}d-${CURRENCY,,}.json"
     cache_seconds="$(get_cache_seconds "$mode")"
 
     mkdir -p "$CACHE_DIR"
@@ -506,7 +576,7 @@ get_chart_file() {
         --connect-timeout 10 \
         --max-time 20 \
         -fsS \
-        "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=${days}" \
+        "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=$(get_currency_api_code)&days=${days}" \
         -o "$chart_cache.tmp"
     then
         count="$(jq '.prices | length' "$chart_cache.tmp")"
@@ -708,7 +778,7 @@ show_price() {
 
     price="$(get_price)"
 
-    printf 'Bitcoin: $%s\n' "$price"
+    printf 'Bitcoin: %s%s\n' "$(get_currency_symbol)" "$price"
 }
 
 
@@ -753,7 +823,7 @@ show_cache() {
         find "$CACHE_DIR" \
             -maxdepth 1 \
             -type f \
-            -name 'chart-*d.json' \
+            -name 'chart-*d-*.json' \
             -print 2>/dev/null |
         sort
     )
@@ -779,7 +849,7 @@ clear_cache() {
         -maxdepth 1 \
         -type f \
         \( \
-            -name 'chart-*d.json' \
+            -name 'chart-*d-*.json' \
             -o -name 'chart-*d.json.tmp' \
         \) \
         -delete
@@ -795,6 +865,7 @@ make_wallpaper() {
     local change
     local change_text
     local change_color
+    local currency_symbol
 
     local title_size
     local price_size
@@ -817,6 +888,7 @@ make_wallpaper() {
 
     change_text="$(format_change "$change")"
     change_color="$(get_change_color "$change")"
+    currency_symbol="$(get_currency_symbol)"
 
     mkdir -p "$CACHE_DIR"
 
@@ -849,7 +921,7 @@ make_wallpaper() {
         -fill "$WHITE" \
         -font DejaVu-Sans \
         -pointsize "$price_size" \
-        -annotate "+0-${price_offset}" "\$${price}" \
+        -annotate "+0-${price_offset}" "${currency_symbol}${price}" \
         -gravity center \
         -fill "$change_color" \
         -font DejaVu-Sans \
@@ -1179,6 +1251,7 @@ show_info() {
     echo "Desktop: ${XDG_CURRENT_DESKTOP:-unknown}"
     echo "Session: ${XDG_SESSION_TYPE:-unknown}"
     echo "Wallpaper backend: $backend"
+    echo "Currency: $CURRENCY ($(get_currency_symbol))"
 }
 
 
@@ -1440,6 +1513,7 @@ show_help() {
     echo "  ./cryptopaper price"
     echo "  ./cryptopaper set [days]"
     echo "  ./cryptopaper run [days] [update-time]"
+    echo "  ./cryptopaper cur USD|EUR|GBP"
     echo "  ./cryptopaper info"
     echo "  ./cryptopaper cache"
     echo "  ./cryptopaper clear-cache"
@@ -1448,6 +1522,7 @@ show_help() {
     echo "  price        Show the current Bitcoin price"
     echo "  set          Generate and set the wallpaper once"
     echo "  run          Keep the wallpaper automatically updated"
+    echo "  cur          Set the persistent display currency"
     echo "  info         Show detected resolution and wallpaper backend"
     echo "  cache        Show cached API data"
     echo "  clear-cache  Remove cached API data"
@@ -1460,6 +1535,9 @@ show_help() {
     echo "  ./cryptopaper run 7d"
     echo "  ./cryptopaper run 1d 30s"
     echo "  ./cryptopaper run 7d 5m"
+    echo "  ./cryptopaper cur EUR"
+    echo "  ./cryptopaper cur GBP"
+    echo "  ./cryptopaper cur USD"
     echo "  ./cryptopaper info"
     echo "  ./cryptopaper cache"
     echo "  ./cryptopaper clear-cache"
@@ -1472,6 +1550,7 @@ show_help() {
     echo "  m = minutes"
     echo "  h = hours"
     echo
+    echo "Default currency: USD"
     echo "Default range: 1d"
     echo "Default update time: 2m"
     echo "Screen resolution: automatically detected"
@@ -1481,6 +1560,7 @@ show_help() {
 }
 
 
+load_currency
 validate_args "$@"
 
 case "$COMMAND" in
@@ -1494,6 +1574,10 @@ case "$COMMAND" in
 
     run)
         run_wallpaper
+        ;;
+
+    cur)
+        set_currency "${2:-}"
         ;;
 
     info)

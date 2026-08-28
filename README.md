@@ -1,287 +1,337 @@
 # cryptopaper
 
-A lightweight Bash script that displays the current Bitcoin price and price history as your Linux wallpaper.
+`cryptopaper` is a Bash script that turns the current Bitcoin price and recent price history into a dynamically generated desktop wallpaper.
+
+It fetches Bitcoin market data from CoinGecko, generates a wallpaper with ImageMagick, detects your screen resolution automatically, and applies the wallpaper using the appropriate backend for your desktop environment.
 
 ## Features
 
-- Current Bitcoin price
-- Percentage change for the selected time range
-- Green/red price movement graph
-- Custom graph ranges such as `1d`, `7d`, `16d`, `30d`, or any other positive number of days
-- Automatic wallpaper updates with the `run` command
-- Custom refresh intervals such as `30s`, `2m`, `10m`, or `1h`
-- Separate price and chart caching
-- Cached-data fallback when the API is temporarily unavailable
-- Automatic screen resolution detection
-- Wallpaper layout automatically scales to the detected resolution
-- Automatic desktop environment and wallpaper backend detection
-- Multi-desktop and multi-window-manager support
-- Lightweight Bash implementation
+* Current Bitcoin price
+* Bitcoin price chart
+* Configurable chart range
+* Automatic wallpaper updates
+* Automatic screen resolution detection
+* Persistent currency selection
+* API caching
+* KDE Plasma support
+* GNOME support
+* Cinnamon support
+* MATE support
+* XFCE support
+* LXQt support
+* Hyprland support
+* Sway support
+* Generic Wayland support
+* Generic X11 support
 
-## Supported desktops and wallpaper backends
+## Supported currencies
 
-cryptopaper automatically detects the current desktop environment and selects an appropriate wallpaper backend.
+cryptopaper currently supports:
 
-| Desktop / WM | Wallpaper backend |
-| --- | --- |
-| KDE Plasma | `plasma-apply-wallpaperimage` |
-| GNOME | `gsettings` |
-| Cinnamon | `gsettings` |
-| MATE | `gsettings` |
-| XFCE | `xfconf-query` |
-| LXQt | `pcmanfm-qt` |
-| Hyprland | `hyprpaper`, `swww`, or `swaybg` |
-| Sway / compatible Wayland compositors | `swaybg` or `swww` |
-| Generic Wayland | `swww` or `swaybg` |
-| Generic X11 / i3 | `feh` |
+* USD — `$`
+* EUR — `€`
+* GBP — `£`
 
-Tested successfully on:
+The default currency is:
 
-- KDE Plasma
-- GNOME
-- Cinnamon
-- MATE
-- XFCE
-- LXQt
-- Hyprland
-- Niri
-- i3
+```bash
+USD
+```
 
-Not every Linux desktop environment or window manager has been tested yet.
+Your selected currency is saved permanently until you change it again.
 
-## Dependencies
+## Requirements
 
-### Core dependencies
+Core dependencies:
 
-- Bash
-- curl
-- jq
-- ImageMagick
-- awk
+```bash
+curl
+jq
+imagemagick
+```
 
-### Wallpaper backend dependencies
+On many distributions, the ImageMagick executable used by cryptopaper is:
 
-You only need the backend used by your desktop environment.
+```bash
+magick
+```
 
-#### KDE Plasma
+You also need a supported wallpaper backend for your desktop environment.
 
-```text
+### KDE Plasma
+
+```bash
 plasma-apply-wallpaperimage
+kscreen-doctor
 ```
 
-#### GNOME
+### GNOME
 
-```text
+```bash
 gsettings
 ```
 
-#### Cinnamon
+### Cinnamon
 
-```text
+```bash
 gsettings
 ```
 
-#### MATE
+### MATE
 
-```text
+```bash
 gsettings
 ```
 
-#### XFCE
+### XFCE
 
-```text
+```bash
 xfconf-query
 ```
 
-#### LXQt
+### LXQt
 
-```text
+```bash
 pcmanfm-qt
 ```
 
-#### Hyprland
+### Hyprland
 
 At least one of:
 
-```text
+```bash
 hyprpaper
 swww
 swaybg
 ```
 
-#### Wayland compositors
+### Sway
 
 At least one of:
 
-```text
-swww
+```bash
 swaybg
+swww
 ```
 
-#### Generic X11 / i3
+### Generic X11
 
-```text
+```bash
 feh
 ```
 
-## NixOS / Home Manager
+## Installation
 
-Core dependencies:
+Clone the repository:
 
-```nix
-home.packages = with pkgs; [
-  curl
-  jq
-  imagemagick
-  gawk
-];
+```bash
+git clone <repository-url>
+cd cryptopaper
 ```
 
-Optional wallpaper tools can be added separately if your desktop does not already provide one:
+Make the script executable:
 
-```nix
-home.packages = with pkgs; [
-  curl
-  jq
-  imagemagick
-  gawk
-
-  # Optional wallpaper backends
-  swaybg
-  swww
-  feh
-];
+```bash
+chmod +x cryptopaper
 ```
 
-You do not need every wallpaper backend installed.
-
-## Usage
-
-Show help:
+Run:
 
 ```bash
 ./cryptopaper help
 ```
 
-Show detected desktop, resolution, session type, and wallpaper backend:
+## Usage
 
 ```bash
+./cryptopaper price
+./cryptopaper set [days]
+./cryptopaper run [days] [update-time]
+./cryptopaper cur USD|EUR|GBP
 ./cryptopaper info
+./cryptopaper cache
+./cryptopaper clear-cache
 ```
 
-Example:
+## Commands
 
-```text
-cryptopaper info
-
-Resolution: 1920x1080
-Desktop: GNOME
-Session: wayland
-Wallpaper backend: GNOME
-```
-
-Show the current Bitcoin price:
+### Show the current Bitcoin price
 
 ```bash
 ./cryptopaper price
 ```
 
-Generate and set the wallpaper once using the default 1-day graph:
+Example:
+
+```text
+Bitcoin: $123456.78
+```
+
+The displayed currency depends on your currently selected currency.
+
+---
+
+### Generate and set the wallpaper once
 
 ```bash
 ./cryptopaper set
 ```
 
-Use a custom history range:
+Use a custom chart range:
 
 ```bash
 ./cryptopaper set 7d
-./cryptopaper set 30d
-./cryptopaper set 90d
 ```
 
-Any positive number of days can be used:
+Other examples:
 
 ```bash
+./cryptopaper set 1d
 ./cryptopaper set 16d
+./cryptopaper set 30d
 ```
 
-The percentage shown on the wallpaper matches the selected graph range.
+---
 
-For example:
-
-```bash
-./cryptopaper set 7d
-```
-
-shows:
-
-- a 7-day Bitcoin price graph
-- the percentage change over the same 7-day period
-
-## Automatic updates
-
-Keep the wallpaper updated automatically:
+### Automatically update the wallpaper
 
 ```bash
 ./cryptopaper run
 ```
 
-By default, this uses:
+The default update interval is:
 
 ```text
-Graph range: 1 day
-Refresh interval: 2 minutes
+2 minutes
 ```
 
-Use a custom graph range:
+Use a custom range:
 
 ```bash
 ./cryptopaper run 7d
 ```
 
-Use a custom refresh interval:
+Use a custom range and update interval:
 
 ```bash
 ./cryptopaper run 1d 30s
 ./cryptopaper run 7d 5m
-./cryptopaper run 30d 10m
-./cryptopaper run 90d 1h
+./cryptopaper run 30d 1h
 ```
 
-Supported refresh units:
+Press:
 
-- `s` — seconds
-- `m` — minutes
-- `h` — hours
+```text
+Ctrl+C
+```
 
-Example:
+to stop automatic updates.
+
+## Currency
+
+Change the active currency with:
 
 ```bash
-./cryptopaper run 7d 5m
+./cryptopaper cur USD
+./cryptopaper cur EUR
+./cryptopaper cur GBP
 ```
 
-This uses a 7-day graph and refreshes every 5 minutes.
+For example:
 
-Press `Ctrl+C` to stop.
+```bash
+./cryptopaper cur EUR
+```
 
-### Refresh interval note
+cryptopaper will then use EUR for both the current Bitcoin price and chart data.
 
-Very short refresh intervals are supported.
+The selected currency persists across future runs until you change it again.
 
-However, the API may return the same price for multiple requests, so very short refresh intervals may not always show a different price.
+To switch back to the default:
 
-Frequent requests may also increase the chance of hitting API rate limits.
+```bash
+./cryptopaper cur USD
+```
 
-The default refresh interval is:
+Unsupported currencies are rejected.
+
+For example:
+
+```bash
+./cryptopaper cur CAD
+```
+
+will fail because only USD, EUR, and GBP are currently supported.
+
+## Time ranges
+
+Chart ranges use the following format:
+
+```text
+<number>d
+```
+
+Examples:
+
+```bash
+1d
+7d
+16d
+30d
+```
+
+The default chart range is:
+
+```text
+1d
+```
+
+## Update intervals
+
+Automatic update intervals support:
+
+```text
+s = seconds
+m = minutes
+h = hours
+```
+
+Examples:
+
+```bash
+30s
+2m
+10m
+1h
+```
+
+The default update interval is:
 
 ```text
 2m
 ```
 
-## Cache commands
+## System information
 
-Show cached API data:
+To see what cryptopaper detected:
+
+```bash
+./cryptopaper info
+```
+
+This shows information such as:
+
+* Screen resolution
+* Desktop environment
+* Session type
+* Wallpaper backend
+* Active currency
+
+## Cache
+
+cryptopaper caches CoinGecko API responses to avoid unnecessary requests.
+
+View cache information:
 
 ```bash
 ./cryptopaper cache
@@ -293,147 +343,105 @@ Clear cached API data:
 ./cryptopaper clear-cache
 ```
 
-`clear-cache` removes API cache files but does not remove generated wallpaper images.
+Chart data is kept separate for different ranges and currencies so data from one currency is not accidentally reused for another.
 
-## Caching
-
-cryptopaper stores its cache in:
-
-```text
-~/.cache/cryptopaper/
-```
-
-Example contents:
-
-```text
-market.json
-chart-1d.json
-chart-7d.json
-wallpaper-1787918370.png
-swaybg.pid
-```
-
-### Cache files
-
-`market.json` stores the current Bitcoin price.
-
-Files such as:
-
-```text
-chart-1d.json
-chart-7d.json
-chart-30d.json
-```
-
-store historical graph data for different time ranges.
-
-Generated wallpapers are stored as:
-
-```text
-wallpaper-<timestamp>.png
-```
-
-For example:
-
-```text
-wallpaper-1787918370.png
-```
-
-### swaybg PID file
-
-When cryptopaper uses `swaybg`, it also creates:
-
-```text
-swaybg.pid
-```
-
-`swaybg` must remain running in the background to keep the wallpaper visible.
-
-cryptopaper stores the process ID of the `swaybg` instance it started so that it can safely stop and replace only its own previous wallpaper process.
-
-Other desktop backends do not need PID files because the desktop environment manages the wallpaper itself.
+Changing the active currency also prevents stale data from the previous currency being displayed.
 
 ## Screen resolution
 
-cryptopaper automatically detects the current screen resolution.
+cryptopaper automatically attempts to detect your active screen resolution.
 
-It uses desktop/session-specific methods where possible, including:
+It supports detection through tools including:
 
-- `kscreen-doctor` on KDE Plasma
-- `hyprctl` on Hyprland
-- `swaymsg` on Sway
-- `xrandr` on X11
-- `xdpyinfo` as an X11 fallback
+* `kscreen-doctor`
+* `hyprctl`
+* `swaymsg`
+* `xrandr`
+* `xdpyinfo`
 
-Invalid or unusually small detected resolutions are rejected.
-
-If automatic detection fails, cryptopaper falls back to:
+If detection fails, cryptopaper falls back to:
 
 ```text
 1920x1080
 ```
 
-The wallpaper layout, text, graph, and spacing automatically scale to the detected resolution.
-
-### Resolution override
-
-You can manually override resolution detection for testing:
+For testing, the resolution can also be overridden:
 
 ```bash
 CRYPTOPAPER_RESOLUTION=2560x1440 ./cryptopaper set
 ```
 
-Examples:
+## Wallpaper backends
+
+cryptopaper automatically selects a wallpaper backend based on the current desktop environment.
+
+Supported backends include:
+
+| Environment     | Backend                          |
+| --------------- | -------------------------------- |
+| KDE Plasma      | `plasma-apply-wallpaperimage`    |
+| GNOME           | `gsettings`                      |
+| Cinnamon        | `gsettings`                      |
+| MATE            | `gsettings`                      |
+| XFCE            | `xfconf-query`                   |
+| LXQt            | `pcmanfm-qt`                     |
+| Hyprland        | `hyprpaper`, `swww`, or `swaybg` |
+| Sway            | `swaybg` or `swww`               |
+| Generic Wayland | `swww` or `swaybg`               |
+| Generic X11     | `feh`                            |
+
+## Examples
+
+Show the current price:
 
 ```bash
-CRYPTOPAPER_RESOLUTION=3840x2160 ./cryptopaper set
-CRYPTOPAPER_RESOLUTION=3440x1440 ./cryptopaper set
-CRYPTOPAPER_RESOLUTION=1366x768 ./cryptopaper set
+./cryptopaper price
 ```
 
-This only changes the generated wallpaper resolution.
+Use euros:
 
-It does not change your monitor resolution.
-
-## XFCE note
-
-Fresh XFCE profiles may initially have no wallpaper configuration properties.
-
-cryptopaper attempts to detect existing XFCE wallpaper properties and can initialize a wallpaper property when necessary.
-
-## Wallpaper files
-
-Generated wallpapers are stored in:
-
-```text
-~/.cache/cryptopaper/
+```bash
+./cryptopaper cur EUR
+./cryptopaper price
 ```
 
-Old generated wallpapers are periodically cleaned up.
+Generate a one-day wallpaper:
+
+```bash
+./cryptopaper set 1d
+```
+
+Generate a seven-day wallpaper:
+
+```bash
+./cryptopaper set 7d
+```
+
+Continuously update every 30 seconds:
+
+```bash
+./cryptopaper run 1d 30s
+```
+
+Use GBP and update a seven-day chart every five minutes:
+
+```bash
+./cryptopaper cur GBP
+./cryptopaper run 7d 5m
+```
+
+Show detected system information:
+
+```bash
+./cryptopaper info
+```
+
+Clear the API cache:
+
+```bash
+./cryptopaper clear-cache
+```
 
 ## Data source
 
-Bitcoin market data is provided by the CoinGecko API.
-
-cryptopaper uses separate API data for:
-
-- current Bitcoin price
-- historical chart data
-
-This keeps the displayed current price independent from the selected chart range.
-
-## Current limitations
-
-- Bitcoin only
-- USD only
-- Multi-monitor support is still limited
-- Not every Linux desktop environment or window manager has been tested
-- Some Wayland compositors require an external wallpaper tool such as `swaybg` or `swww`
-- `run` currently runs in the foreground
-- No systemd/background service mode yet
-
-## Status
-
-Early development.
-
-Desktop compatibility and wallpaper backend support are still being expanded.
+Bitcoin pricing and chart data are retrieved from the CoinGecko API.
