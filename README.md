@@ -8,9 +8,12 @@ A lightweight Bash script that displays the current Bitcoin price and price hist
 - Percentage change for the selected time range
 - Green/red price movement graph
 - Custom graph ranges such as `1d`, `7d`, `16d`, `30d`, or any other positive number of days
-- Local caching to reduce API calls and avoid rate limits
+- Automatic wallpaper updates with the `run` command
+- Custom refresh intervals such as `30s`, `2m`, `10m`, or `1h`
+- Separate price and chart caching to reduce API calls and avoid rate limits
+- Cached-data fallback when the API is temporarily unavailable
 - KDE Plasma wallpaper support
-- Lightweight Bash-only implementation
+- Lightweight Bash implementation
 
 ## Dependencies
 
@@ -34,13 +37,19 @@ home.packages = with pkgs; [
 
 ## Usage
 
+Show help:
+
+```bash
+./cryptopaper help
+```
+
 Show the current Bitcoin price:
 
 ```bash
 ./cryptopaper price
 ```
 
-Generate and set the wallpaper using the default 1-day graph:
+Generate and set the wallpaper once using the default 1-day graph:
 
 ```bash
 ./cryptopaper set
@@ -73,6 +82,47 @@ will show:
 - a 7-day Bitcoin price graph
 - the percentage change over that same 7-day period
 
+### Automatic updates
+
+Keep the wallpaper updated automatically:
+
+```bash
+./cryptopaper run
+```
+
+By default, this uses a 1-day graph and refreshes every 2 minutes.
+
+Use a custom graph range:
+
+```bash
+./cryptopaper run 7d
+```
+
+Use a custom refresh interval:
+
+```bash
+./cryptopaper run 1d 30s
+./cryptopaper run 7d 5m
+./cryptopaper run 30d 10m
+./cryptopaper run 90d 1h
+```
+
+Supported refresh units:
+
+- `s` — seconds
+- `m` — minutes
+- `h` — hours
+
+For example:
+
+```bash
+./cryptopaper run 7d 5m
+```
+
+uses a 7-day graph and refreshes the wallpaper every 5 minutes.
+
+Press `Ctrl+C` to stop automatic updates.
+
 ## Caching
 
 Cryptopaper stores API data in:
@@ -81,9 +131,41 @@ Cryptopaper stores API data in:
 ~/.cache/cryptopaper/
 ```
 
-Price data is refreshed every 2 minutes.
+It keeps separate cached data for:
 
-If CoinGecko is temporarily unavailable or rate-limited, Cryptopaper will reuse cached data when possible.
+- the current Bitcoin price
+- historical chart data for each selected range
+
+For example:
+
+```text
+market.json
+chart-1d.json
+chart-7d.json
+chart-30d.json
+```
+
+Caching reduces unnecessary API requests and helps avoid CoinGecko rate limits.
+
+When using:
+
+```bash
+./cryptopaper run
+```
+
+the default refresh interval is 2 minutes.
+
+A custom refresh interval can also be used:
+
+```bash
+./cryptopaper run 1d 30s
+./cryptopaper run 7d 5m
+./cryptopaper run 30d 10m
+```
+
+While `run` is active, cached price and chart data are refreshed according to the selected update interval.
+
+If CoinGecko is temporarily unavailable or rate-limited, Cryptopaper will reuse the most recent cached data when possible.
 
 ## Current Limitations
 

@@ -2,10 +2,15 @@
 
 set -euo pipefail
 
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cryptopaper"
-CHART_CACHE_SECONDS=120
+PRICE_API="https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
 
-OUTPUT="$CACHE_DIR/wallpaper-$(date +%s).png"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cryptopaper"
+
+DEFAULT_UPDATE_TIME="2m"
+
+PRICE_CACHE="$CACHE_DIR/market.json"
+
+OUTPUT=""
 
 GREEN="#00c853"
 RED="#ff5252"
@@ -14,6 +19,8 @@ BACKGROUND="#090909"
 GRAY="#aaaaaa"
 
 TIME_RANGE="${2:-1d}"
+UPDATE_TIME="${3:-$DEFAULT_UPDATE_TIME}"
+
 RANGE_LABEL="${TIME_RANGE^^}"
 
 get_days() {
@@ -26,21 +33,145 @@ get_days() {
     fi
 }
 
+parse_update_time() {
+    local value="$1"
+
+    if [[ "$value" =~ ^([1-9][0-9]*)(s|m|h)$ ]]; then
+        local amount="${BASH_REMATCH[1]}"
+        local unit="${BASH_REMATCH[2]}"
+
+        case "$unit" in
+            s)
+                echo "$amount"
+                ;;
+            m)
+                echo $(( amount * 60 ))
+                ;;
+            h)
+                echo $(( amount * 3600 ))
+                ;;
+        esac
+    else
+        echo "Invalid update time: $value" >&2
+        echo "Use something like: 30s, 2m, 10m, 1h" >&2
+        exit 1
+    fi
+}
+
+format_update_time() {
+    local seconds="$1"
+
+    if (( seconds % 3600 == 0 )); then
+        local hours=$(( seconds / 3600 ))
+
+        if (( hours == 1 )); then
+            echo "1 hour"
+        else
+            echo "$hours hours"
+        fi
+
+    elif (( seconds % 60 == 0 )); then
+        local minutes=$(( seconds / 60 ))
+
+        if (( minutes == 1 )); then
+            echo "1 minute"
+        else
+            echo "$minutes minutes"
+        fi
+
+    else
+        if (( seconds == 1 )); then
+            echo "1 second"
+        else
+            echo "$seconds seconds"
+        fi
+    fi
+}
+
+get_cache_seconds() {
+    local mode="${1:-}"
+
+    if [[ "$mode" == "run" ]]; then
+        parse_update_time "$UPDATE_TIME"
+    else
+        echo 120
+    fi
+}
+
+get_price_json() {
+    local mode="${1:-}"
+    local cache_seconds
+    local age
+
+    cache_seconds="$(get_cache_seconds "$mode")"
+
+    mkdir -p "$CACHE_DIR"
+
+    if [[ -f "$PRICE_CACHE" ]]; then
+        age=$(( $(date +%s) - $(stat -c %Y "$PRICE_CACHE") ))
+
+        if (( age < cache_seconds )); then
+            cat "$PRICE_CACHE"
+            return
+        fi
+    fi
+
+    if curl -fsS "$PRICE_API" -o "$PRICE_CACHE.tmp"; then
+        if jq -e '.bitcoin.usd' "$PRICE_CACHE.tmp" >/dev/null 2>&1; then
+            mv "$PRICE_CACHE.tmp" "$PRICE_CACHE"
+            cat "$PRICE_CACHE"
+            return
+        fi
+
+        rm -f "$PRICE_CACHE.tmp"
+    fi
+
+    if [[ -f "$PRICE_CACHE" ]]; then
+        echo "Price API unavailable, using cached data." >&2
+        cat "$PRICE_CACHE"
+        return
+    fi
+
+    echo "Could not fetch Bitcoin price." >&2
+    return 1
+}
+
+get_price() {
+    local mode="${1:-}"
+    local response
+    local price
+
+    response="$(get_price_json "$mode")" || return 1
+
+    price="$(printf '%s' "$response" | jq -r '.bitcoin.usd // empty')"
+
+    if [[ -z "$price" ]]; then
+        echo "Could not get Bitcoin price." >&2
+        return 1
+    fi
+
+    printf '%.2f\n' "$price"
+}
+
 get_chart_file() {
+    local mode="${1:-}"
+
     local days
     local chart_cache
+    local cache_seconds
     local age
     local count
 
     days="$(get_days)"
     chart_cache="$CACHE_DIR/chart-${days}d.json"
+    cache_seconds="$(get_cache_seconds "$mode")"
 
     mkdir -p "$CACHE_DIR"
 
     if [[ -f "$chart_cache" ]]; then
         age=$(( $(date +%s) - $(stat -c %Y "$chart_cache") ))
 
-        if (( age < CHART_CACHE_SECONDS )); then
+        if (( age < cache_seconds )); then
             printf '%s\n' "$chart_cache"
             return
         fi
@@ -62,7 +193,7 @@ get_chart_file() {
     fi
 
     if [[ -f "$chart_cache" ]]; then
-        echo "API unavailable, using cached ${days}d data." >&2
+        echo "Chart API unavailable, using cached ${days}d data." >&2
         printf '%s\n' "$chart_cache"
         return
     fi
@@ -72,35 +203,22 @@ get_chart_file() {
 }
 
 get_chart_data() {
+    local mode="${1:-}"
     local chart_file
 
-    chart_file="$(get_chart_file)" || return 1
+    chart_file="$(get_chart_file "$mode")" || return 1
 
     jq -r '.prices[][1]' "$chart_file"
 }
 
-get_price() {
-    local chart_file
-    local price
-
-    chart_file="$(get_chart_file)" || return 1
-
-    price="$(jq -r '.prices[-1][1] // empty' "$chart_file")"
-
-    if [[ -z "$price" ]]; then
-        echo "Could not get Bitcoin price." >&2
-        return 1
-    fi
-
-    printf '%.2f\n' "$price"
-}
-
 get_range_change() {
+    local mode="${1:-}"
+
     local chart_file
     local first_price
     local last_price
 
-    chart_file="$(get_chart_file)" || return 1
+    chart_file="$(get_chart_file "$mode")" || return 1
 
     first_price="$(jq -r '.prices[0][1]' "$chart_file")"
     last_price="$(jq -r '.prices[-1][1]' "$chart_file")"
@@ -146,6 +264,8 @@ format_change() {
 }
 
 make_graph_draw_args() {
+    local mode="${1:-}"
+
     local -a prices
     local -a args=()
 
@@ -170,7 +290,7 @@ make_graph_draw_args() {
 
     local color
 
-    mapfile -t prices < <(get_chart_data)
+    mapfile -t prices < <(get_chart_data "$mode")
 
     count="${#prices[@]}"
 
@@ -246,10 +366,13 @@ show_price() {
     local price
 
     price="$(get_price)"
+
     printf 'Bitcoin: $%s\n' "$price"
 }
 
 make_wallpaper() {
+    local mode="${1:-}"
+
     local price
     local change
     local change_text
@@ -257,18 +380,21 @@ make_wallpaper() {
 
     local -a graph_args
 
-    price="$(get_price)"
-    change="$(get_range_change)"
+    OUTPUT="$CACHE_DIR/wallpaper-$(date +%s).png"
+
+    price="$(get_price "$mode")"
+    change="$(get_range_change "$mode")"
+
     change_text="$(format_change "$change")"
     change_color="$(get_change_color "$change")"
 
     mkdir -p "$CACHE_DIR"
 
-    mapfile -d '' -t graph_args < <(make_graph_draw_args)
+    mapfile -d '' -t graph_args < <(make_graph_draw_args "$mode")
 
     if (( ${#graph_args[@]} == 0 )); then
         echo "Could not generate graph." >&2
-        exit 1
+        return 1
     fi
 
     magick \
@@ -302,13 +428,15 @@ make_wallpaper() {
 }
 
 set_wallpaper() {
-    make_wallpaper
+    local mode="${1:-}"
 
     if ! command -v plasma-apply-wallpaperimage >/dev/null 2>&1; then
         echo "Could not find plasma-apply-wallpaperimage." >&2
         echo "This version currently supports KDE Plasma." >&2
         exit 1
     fi
+
+    make_wallpaper "$mode"
 
     plasma-apply-wallpaperimage "$OUTPUT"
 
@@ -321,23 +449,72 @@ set_wallpaper() {
     printf 'Wallpaper updated.\n'
 }
 
+run_wallpaper() {
+    local update_seconds
+    local update_label
+
+    update_seconds="$(parse_update_time "$UPDATE_TIME")"
+    update_label="$(format_update_time "$update_seconds")"
+
+    echo "Starting cryptopaper..."
+    echo "Range: $RANGE_LABEL"
+    echo "Updating every $update_label."
+    echo "Press Ctrl+C to stop."
+    echo
+
+    trap '
+        echo
+        echo "cryptopaper stopped."
+        exit 0
+    ' INT TERM
+
+    while true; do
+        if ! set_wallpaper "run"; then
+            echo "Update failed. Retrying in $update_label." >&2
+        fi
+
+        sleep "$update_seconds"
+    done
+}
+
 show_help() {
     echo "cryptopaper"
     echo
     echo "Usage:"
     echo "  ./cryptopaper price"
     echo "  ./cryptopaper set [days]"
+    echo "  ./cryptopaper run [days] [update-time]"
+    echo
+    echo "Commands:"
+    echo "  price   Show the current Bitcoin price"
+    echo "  set     Generate and set the wallpaper once"
+    echo "  run     Keep the wallpaper automatically updated"
     echo
     echo "Examples:"
+    echo "  ./cryptopaper price"
+    echo
     echo "  ./cryptopaper set"
-    echo "  ./cryptopaper set 1d"
     echo "  ./cryptopaper set 7d"
-    echo "  ./cryptopaper set 16d"
-    echo "  ./cryptopaper set 30d"
-    echo "  ./cryptopaper set 90d"
+    echo
+    echo "  ./cryptopaper run"
+    echo "  ./cryptopaper run 7d"
+    echo "  ./cryptopaper run 1d 30s"
+    echo "  ./cryptopaper run 7d 5m"
+    echo "  ./cryptopaper run 30d 10m"
+    echo "  ./cryptopaper run 90d 1h"
+    echo
+    echo "Time range:"
+    echo "  1d, 7d, 16d, 30d, etc."
+    echo
+    echo "Update time:"
+    echo "  s = seconds"
+    echo "  m = minutes"
+    echo "  h = hours"
     echo
     echo "Default range: 1d"
-    echo "Data refresh: every 2 minutes"
+    echo "Default update time: 2m"
+    echo
+    echo "Press Ctrl+C to stop the run command."
 }
 
 case "${1:-help}" in
@@ -347,6 +524,10 @@ case "${1:-help}" in
 
     set)
         set_wallpaper
+        ;;
+
+    run)
+        run_wallpaper
         ;;
 
     help|--help|-h)
