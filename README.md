@@ -4,6 +4,8 @@
 
 It fetches market data from CoinGecko, generates a wallpaper with ImageMagick, detects your screen resolution automatically, and applies the wallpaper using the appropriate backend for your desktop environment.
 
+cryptopaper also includes an optional GTK4 GUI. The GUI is a frontend for the Bash CLI, so the CLI remains fully usable without Python or GTK.
+
 ## Features
 
 * Multiple cryptocurrency support
@@ -23,6 +25,14 @@ It fetches market data from CoinGecko, generates a wallpaper with ImageMagick, d
 * API caching
 * Cached-data fallback when CoinGecko is temporarily unavailable
 * Improved cache safety and error handling
+* Optional GTK4 GUI
+* GUI controls for coin, currency, chart range, and update interval
+* GUI current-price display
+* Live GUI price updates while automatic updates are running
+* GUI-managed automatic updater
+* System tray support through StatusNotifierItem
+* Tray icon can reopen the hidden GUI window
+* Automatic updater stops when GUI settings are changed
 * KDE Plasma support
 * GNOME support
 * Cinnamon support
@@ -43,10 +53,11 @@ git clone https://github.com/foxy54456/cryptopaper.git
 cd cryptopaper
 ```
 
-Make the script executable:
+Make the CLI and GUI scripts executable:
 
 ```bash
 chmod +x cryptopaper
+chmod +x cryptopaper-gui.py
 ```
 
 Create a local bin directory:
@@ -55,10 +66,11 @@ Create a local bin directory:
 mkdir -p ~/.local/bin
 ```
 
-Create a symbolic link:
+Create symbolic links for the CLI and GUI:
 
 ```bash
 ln -sf "$PWD/cryptopaper" ~/.local/bin/cryptopaper
+ln -sf "$PWD/cryptopaper-gui.py" ~/.local/bin/cryptopaper-gui
 ```
 
 Now add `~/.local/bin` to your shell PATH.
@@ -127,9 +139,18 @@ Then close the terminal completely, open a new terminal, and run:
 cryptopaper help
 ```
 
-If that works, the installation is complete.
+If that works, the CLI installation is complete.
 
-Because cryptopaper is installed using a symbolic link, editing the script inside the cloned repository automatically updates the `cryptopaper` command.
+If you installed the optional GUI dependencies, you can also verify the GUI command:
+
+```bash
+which cryptopaper-gui
+cryptopaper-gui
+```
+
+Because cryptopaper is installed using symbolic links, editing either script inside the cloned repository automatically updates the corresponding command.
+
+The GUI depends on the CLI command being available in your `PATH`.
 
 ## Requirements
 
@@ -233,6 +254,255 @@ swaybg
 feh
 ```
 
+## GUI requirements
+
+The GUI is optional.
+
+The Bash CLI does **not** require Python, GTK, or PyGObject.
+
+To use the GUI, you need:
+
+```text
+python3
+GTK4
+PyGObject
+GLib / Gio
+GObject Introspection
+```
+
+Package names differ between Linux distributions. On Debian/Ubuntu-based systems, packages may have names similar to:
+
+```text
+python3-gi
+gir1.2-gtk-4.0
+```
+
+On Arch-based systems, packages may have names similar to:
+
+```text
+python-gobject
+gtk4
+```
+
+### NixOS / Home Manager example
+
+A Home Manager package list can include:
+
+```nix
+home.packages = with pkgs; [
+  gtk4
+  pango
+  harfbuzz
+  cairo
+  gdk-pixbuf
+  glib
+  graphene
+  gobject-introspection
+  pkg-config
+
+  (python312.withPackages (ps: with ps; [
+    pygobject3
+  ]))
+];
+```
+
+Depending on your NixOS setup, GObject Introspection typelibs may also need to be available through `GI_TYPELIB_PATH`.
+
+The GUI uses GTK4 directly. It does not require GTK3 or AppIndicator libraries.
+
+## GUI
+
+Launch the graphical interface with:
+
+```bash
+cryptopaper-gui
+```
+
+Or run it directly from the cloned repository:
+
+```bash
+./cryptopaper-gui.py
+```
+
+The GUI controls the same settings and Bash commands used by the CLI.
+
+It does not contain a second wallpaper generator or a separate CoinGecko implementation. The Bash `cryptopaper` command remains the main backend.
+
+### GUI controls
+
+The GUI currently provides controls for:
+
+* Cryptocurrency
+* Fiat currency
+* Chart range
+* Update interval
+* Current price
+* Set Wallpaper
+* Start Auto Update
+* Stop
+* Refresh Price
+* Quit Application
+
+The default GUI selections are:
+
+```text
+coin=btc
+currency=USD
+range=1d
+interval=2m
+```
+
+The GUI reads the same persistent configuration file as the CLI:
+
+```text
+~/.config/cryptopaper/config
+```
+
+Changing a GUI dropdown saves the new setting through the CLI.
+
+### GUI chart ranges
+
+The GUI currently exposes these chart-range choices:
+
+```text
+1d
+3d
+7d
+14d
+16d
+30d
+90d
+```
+
+The CLI still accepts any valid positive day range supported by the script.
+
+If the saved CLI range is not one of the GUI choices, the GUI falls back to its default `1d` selection.
+
+### GUI update intervals
+
+The GUI currently exposes these update intervals:
+
+```text
+15s
+30s
+45s
+1m
+2m
+5m
+10m
+30m
+1h
+```
+
+The CLI remains more flexible and can accept other valid interval values.
+
+If the saved CLI interval is not one of the GUI choices, the GUI falls back to its default `2m` selection.
+
+### Set Wallpaper
+
+Pressing **Set Wallpaper** saves the currently selected GUI settings and runs:
+
+```bash
+cryptopaper set
+```
+
+The wallpaper generation and desktop-backend detection are still handled by the Bash CLI.
+
+### Automatic updates from the GUI
+
+Pressing **Start Auto Update** launches the normal CLI auto-update loop:
+
+```bash
+cryptopaper
+```
+
+The updater runs as a separate process managed by the GUI.
+
+The GUI can remain open while it runs, or the window can be hidden to the system tray when tray support is available.
+
+Press **Stop** to stop the GUI-managed automatic updater.
+
+### Changing settings while auto-update is running
+
+If automatic updates are currently running and you change any of these GUI settings:
+
+* Cryptocurrency
+* Currency
+* Chart range
+* Update interval
+
+the running updater is stopped before the new configuration is used.
+
+The GUI displays:
+
+```text
+Automatic updates stopped because settings changed.
+```
+
+This prevents an old updater process from continuing with settings that no longer match what the GUI displays.
+
+Press **Start Auto Update** again to start the updater with the new settings.
+
+### Live GUI price updates
+
+While automatic updates are running, the Bash CLI updates its normal cached market-price file.
+
+The GUI watches the selected coin/currency market cache and updates the **Current Price** label when that cache changes.
+
+For example:
+
+```text
+~/.cache/cryptopaper/btc-market-usd.json
+~/.cache/cryptopaper/eth-market-eur.json
+```
+
+The cache watcher checks the local file only. It does not make an additional CoinGecko request merely to update the GUI label.
+
+The **Refresh Price** button remains available for a manual price refresh.
+
+### System tray
+
+The GUI implements a StatusNotifierItem tray icon through D-Bus.
+
+On desktops and panels with StatusNotifierItem support, closing the main window hides cryptopaper instead of fully exiting it.
+
+Click the tray icon to reopen the GUI.
+
+The automatic updater can continue running while the window is hidden.
+
+Use **Quit Application** to fully exit the GUI and stop the automatic updater that the GUI started.
+
+If no compatible tray host is available, closing the window exits the GUI rather than leaving an invisible background process running.
+
+KDE Plasma supports StatusNotifierItem natively. Other desktop environments may require panel support or an extension for tray icons.
+
+### GUI icon
+
+The project icon is stored at:
+
+```text
+assets/icon.png
+```
+
+For local development, it can be installed into the user's hicolor icon theme:
+
+```bash
+mkdir -p ~/.local/share/icons/hicolor/256x256/apps
+
+cp assets/icon.png \
+  ~/.local/share/icons/hicolor/256x256/apps/cryptopaper.png
+
+gtk-update-icon-cache ~/.local/share/icons/hicolor
+```
+
+The tray icon requests the icon name:
+
+```text
+cryptopaper
+```
+
+A future packaged installer can perform this icon installation automatically.
+
 ## Supported cryptocurrencies
 
 cryptopaper currently supports the following aliases:
@@ -322,6 +592,8 @@ will fail because only USD, EUR, and GBP are currently supported.
 ## Usage
 
 ```bash
+cryptopaper-gui
+
 cryptopaper
 cryptopaper [days]
 cryptopaper [days] [update-time]
@@ -350,7 +622,7 @@ cryptopaper remembers:
 * Chart range
 * Update interval
 
-These settings are stored in:
+These settings are shared by both the CLI and GUI and are stored in:
 
 ```text
 ~/.config/cryptopaper/config
@@ -450,7 +722,9 @@ Press:
 Ctrl+C
 ```
 
-to stop automatic updates.
+to stop automatic updates when running the CLI directly.
+
+When automatic updates are started from the GUI, use the GUI **Stop** button instead.
 
 ## Refresh interval
 
@@ -993,6 +1267,8 @@ CoinGecko's public API may rate-limit clients making many requests in a short pe
 
 cryptopaper uses caching to reduce unnecessary API requests and can fall back to previously cached data when the API is temporarily unavailable.
 
+The GUI also uses the existing current-price cache for live display updates while the automatic updater is running. Watching the cache does not itself create another CoinGecko API request.
+
 ## Tested environments
 
 cryptopaper has been tested successfully on:
@@ -1007,7 +1283,9 @@ cryptopaper has been tested successfully on:
 * Niri
 * i3
 
-Not every Linux desktop environment or window manager has been tested yet.
+The GTK4 GUI and StatusNotifierItem tray behavior have been tested on KDE Plasma.
+
+Not every Linux desktop environment or window manager has been tested yet, and GUI tray behavior depends on the desktop or panel providing StatusNotifierItem support.
 
 ## Current limitations
 
@@ -1016,8 +1294,29 @@ Not every Linux desktop environment or window manager has been tested yet.
 * Multi-monitor support is still limited
 * Not every Linux desktop environment or window manager has been tested
 * Some Wayland compositors require an external wallpaper tool such as `swaybg` or `swww`
-* The automatic updater currently runs in the foreground
+* The CLI automatic updater runs in the foreground when started directly from a terminal
+* The GUI can manage the updater while its window is hidden to a supported system tray
 * No systemd/background service mode yet
+* GUI tray behavior depends on StatusNotifierItem support from the desktop environment or panel
+* The GTK4 GUI has not yet been tested across every supported desktop environment
+
+## Project structure
+
+```text
+cryptopaper/
+├── cryptopaper
+├── cryptopaper-gui.py
+├── assets/
+│   └── icon.png
+├── README.md
+└── LICENSE
+```
+
+`cryptopaper` is the main Bash CLI and contains the market-data, wallpaper-generation, caching, configuration, screen-detection, and wallpaper-backend logic.
+
+`cryptopaper-gui.py` is the optional GTK4 frontend. It calls the Bash CLI instead of duplicating the core implementation.
+
+`assets/icon.png` contains the application/tray icon.
 
 ## License
 
