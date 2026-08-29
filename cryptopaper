@@ -10,6 +10,8 @@ SWAYBG_PID_FILE="$CACHE_DIR/swaybg.pid"
 DEFAULT_CURRENCY="USD"
 CURRENCY="$DEFAULT_CURRENCY"
 
+DEFAULT_COIN="btc"
+
 DEFAULT_UPDATE_TIME="2m"
 
 OUTPUT=""
@@ -26,9 +28,9 @@ BASE_HEIGHT=1080
 SCREEN_WIDTH="$BASE_WIDTH"
 SCREEN_HEIGHT="$BASE_HEIGHT"
 
-COMMAND="${1:-help}"
+COMMAND="${1:-__run__}"
 
-COIN="btc"
+COIN="$DEFAULT_COIN"
 COIN_ID="bitcoin"
 COIN_NAME="BITCOIN"
 
@@ -52,24 +54,6 @@ check_dependencies() {
         printf '  %s\n' "${missing[@]}" >&2
         return 1
     fi
-}
-
-load_currency() {
-    local value=""
-
-    if [[ -f "$CONFIG_FILE" ]]; then
-        value="$(awk -F= '$1 == "currency" { print $2; exit }' "$CONFIG_FILE" 2>/dev/null || true)"
-        value="${value^^}"
-    fi
-
-    case "$value" in
-        USD|EUR|GBP)
-            CURRENCY="$value"
-            ;;
-        *)
-            CURRENCY="$DEFAULT_CURRENCY"
-            ;;
-    esac
 }
 
 
@@ -101,9 +85,8 @@ set_currency() {
             ;;
     esac
 
-    mkdir -p "$CONFIG_DIR"
-    printf 'currency=%s\n' "$value" > "$CONFIG_FILE"
     CURRENCY="$value"
+    save_config
 
     echo "Currency set to $CURRENCY ($(get_currency_symbol))."
 }
@@ -172,75 +155,152 @@ set_coin() {
 }
 
 
+save_config() {
+    mkdir -p "$CONFIG_DIR"
+
+    {
+        printf 'coin=%s\n' "$COIN"
+        printf 'currency=%s\n' "$CURRENCY"
+        printf 'range=%s\n' "$TIME_RANGE"
+        printf 'interval=%s\n' "$UPDATE_TIME"
+    } > "$CONFIG_FILE"
+}
+
+
+load_config() {
+    local saved_coin=""
+    local saved_currency=""
+    local saved_range=""
+    local saved_interval=""
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        saved_coin="$(awk -F= '$1 == "coin" { print $2; exit }' "$CONFIG_FILE" 2>/dev/null || true)"
+        saved_currency="$(awk -F= '$1 == "currency" { print $2; exit }' "$CONFIG_FILE" 2>/dev/null || true)"
+        saved_range="$(awk -F= '$1 == "range" { print $2; exit }' "$CONFIG_FILE" 2>/dev/null || true)"
+        saved_interval="$(awk -F= '$1 == "interval" { print $2; exit }' "$CONFIG_FILE" 2>/dev/null || true)"
+    fi
+
+    if [[ -n "$saved_coin" ]]; then
+        if ! set_coin "$saved_coin" >/dev/null 2>&1; then
+            set_coin "$DEFAULT_COIN"
+        fi
+    else
+        set_coin "$DEFAULT_COIN"
+    fi
+
+    saved_currency="${saved_currency^^}"
+
+    case "$saved_currency" in
+        USD|EUR|GBP)
+            CURRENCY="$saved_currency"
+            ;;
+        *)
+            CURRENCY="$DEFAULT_CURRENCY"
+            ;;
+    esac
+
+    if [[ "$saved_range" =~ ^[1-9][0-9]*d$ ]]; then
+        TIME_RANGE="$saved_range"
+    else
+        TIME_RANGE="1d"
+    fi
+
+    if [[ "$saved_interval" =~ ^[1-9][0-9]*(s|m|h)$ ]]; then
+        UPDATE_TIME="$saved_interval"
+    else
+        UPDATE_TIME="$DEFAULT_UPDATE_TIME"
+    fi
+}
+
+
+set_active_coin() {
+    local value="${1:-}"
+
+    set_coin "$value" || return 1
+    save_config
+
+    echo "Coin set to $COIN_NAME ($COIN)."
+}
+
+
+set_saved_range() {
+    local value="${1:-}"
+
+    if [[ ! "$value" =~ ^[1-9][0-9]*d$ ]]; then
+        echo "Invalid time range: $value" >&2
+        echo "Use something like: 1d, 7d, 16d, 30d" >&2
+        return 1
+    fi
+
+    TIME_RANGE="$value"
+    RANGE_LABEL="${TIME_RANGE^^}"
+    save_config
+
+    echo "Range set to $TIME_RANGE."
+}
+
+
+set_saved_interval() {
+    local value="${1:-}"
+
+    if [[ ! "$value" =~ ^[1-9][0-9]*(s|m|h)$ ]]; then
+        echo "Invalid update time: $value" >&2
+        echo "Use something like: 30s, 2m, 10m, 1h" >&2
+        return 1
+    fi
+
+    UPDATE_TIME="$value"
+    save_config
+
+    echo "Update interval set to $UPDATE_TIME."
+}
+
+
 parse_cli_args() {
     case "$COMMAND" in
-        price)
-            if (( $# > 2 )); then
-                echo "Usage: cryptopaper price [coin]" >&2
+        __run__)
+            if (( $# != 0 )); then
+                echo "Usage: cryptopaper" >&2
                 exit 1
             fi
+            ;;
 
-            if (( $# == 2 )); then
-                set_coin "$2" || exit 1
-            else
-                set_coin "btc"
+        price)
+            if (( $# != 1 )); then
+                echo "Usage: cryptopaper price" >&2
+                exit 1
             fi
             ;;
 
         set)
-            if (( $# > 3 )); then
-                echo "Usage: cryptopaper set [coin] [days]" >&2
+            if (( $# > 2 )); then
+                echo "Usage: cryptopaper set [days]" >&2
                 exit 1
             fi
 
-            if (( $# == 1 )); then
-                set_coin "btc"
-
-            elif (( $# == 2 )); then
-                if [[ "$2" =~ ^[1-9][0-9]*d$ ]]; then
-                    set_coin "btc"
-                    TIME_RANGE="$2"
-                else
-                    set_coin "$2" || exit 1
-                fi
-
-            elif (( $# == 3 )); then
-                set_coin "$2" || exit 1
-                TIME_RANGE="$3"
+            if (( $# == 2 )); then
+                TIME_RANGE="$2"
             fi
             ;;
 
-        run)
-            if (( $# > 4 )); then
-                echo "Usage: cryptopaper run [coin] [days] [update-time]" >&2
+        range)
+            if (( $# != 2 )); then
+                echo "Usage: cryptopaper range <days>" >&2
                 exit 1
             fi
+            ;;
 
-            if (( $# == 1 )); then
-                set_coin "btc"
+        interval)
+            if (( $# != 2 )); then
+                echo "Usage: cryptopaper interval <time>" >&2
+                exit 1
+            fi
+            ;;
 
-            elif (( $# == 2 )); then
-                if [[ "$2" =~ ^[1-9][0-9]*d$ ]]; then
-                    set_coin "btc"
-                    TIME_RANGE="$2"
-                else
-                    set_coin "$2" || exit 1
-                fi
-
-            elif (( $# == 3 )); then
-                if [[ "$2" =~ ^[1-9][0-9]*d$ ]]; then
-                    set_coin "btc"
-                    TIME_RANGE="$2"
-                    UPDATE_TIME="$3"
-                else
-                    set_coin "$2" || exit 1
-                    TIME_RANGE="$3"
-                fi
-
-            elif (( $# == 4 )); then
-                set_coin "$2" || exit 1
-                TIME_RANGE="$3"
-                UPDATE_TIME="$4"
+        coin)
+            if (( $# != 2 )); then
+                echo "Usage: cryptopaper coin btc|eth|sol|doge|xmr|bnb|xrp" >&2
+                exit 1
             fi
             ;;
 
@@ -249,8 +309,6 @@ parse_cli_args() {
                 echo "Usage: cryptopaper cur USD|EUR|GBP" >&2
                 exit 1
             fi
-
-            set_coin "btc"
             ;;
 
         cache|clear-cache|info)
@@ -258,22 +316,45 @@ parse_cli_args() {
                 echo "Usage: cryptopaper $COMMAND" >&2
                 exit 1
             fi
-
-            set_coin "btc"
             ;;
 
         help|--help|-h)
-            set_coin "btc"
+            if (( $# != 1 )); then
+                echo "Usage: cryptopaper help" >&2
+                exit 1
+            fi
             ;;
 
         *)
-            set_coin "btc"
+            # Positional auto-run shortcut:
+            #   cryptopaper 3d
+            #   cryptopaper 3d 45s
+            # These update the saved run settings, then start the updater.
+            if [[ "$COMMAND" =~ ^[1-9][0-9]*d$ ]]; then
+                if (( $# > 2 )); then
+                    echo "Usage: cryptopaper [days] [update-time]" >&2
+                    exit 1
+                fi
+
+                TIME_RANGE="$COMMAND"
+
+                if (( $# == 2 )); then
+                    if ! parse_update_time "$2" >/dev/null; then
+                        exit 1
+                    fi
+                    UPDATE_TIME="$2"
+                fi
+
+                COMMAND="__run__"
+                RANGE_LABEL="${TIME_RANGE^^}"
+                save_config
+                return
+            fi
             ;;
     esac
 
     RANGE_LABEL="${TIME_RANGE^^}"
 }
-
 
 get_days() {
     if [[ "$TIME_RANGE" =~ ^([1-9][0-9]*)d$ ]]; then
@@ -365,16 +446,28 @@ format_age() {
 
 validate_args() {
     case "$COMMAND" in
-        price|cur|cache|clear-cache|info|help|--help|-h)
+        __run__)
+            get_days >/dev/null || exit 1
+            parse_update_time "$UPDATE_TIME" >/dev/null || exit 1
             ;;
 
         set)
             get_days >/dev/null || exit 1
             ;;
 
-        run)
-            get_days >/dev/null || exit 1
-            parse_update_time "$UPDATE_TIME" >/dev/null || exit 1
+        range)
+            [[ "${2:-}" =~ ^[1-9][0-9]*d$ ]] || {
+                echo "Invalid time range: ${2:-}" >&2
+                echo "Use something like: 1d, 7d, 16d, 30d" >&2
+                exit 1
+            }
+            ;;
+
+        interval)
+            parse_update_time "${2:-}" >/dev/null || exit 1
+            ;;
+
+        price|coin|cur|cache|clear-cache|info|help|--help|-h)
             ;;
 
         *)
@@ -1569,7 +1662,10 @@ show_info() {
     echo "Desktop: ${XDG_CURRENT_DESKTOP:-unknown}"
     echo "Session: ${XDG_SESSION_TYPE:-unknown}"
     echo "Wallpaper backend: $backend"
+    echo "Coin: $COIN_NAME ($COIN)"
     echo "Currency: $CURRENCY ($(get_currency_symbol))"
+    echo "Saved range: $TIME_RANGE"
+    echo "Saved interval: $UPDATE_TIME"
 }
 
 
@@ -1763,13 +1859,34 @@ show_help() {
     echo "cryptopaper"
     echo
     echo "Usage:"
-    echo "  cryptopaper price [coin]"
-    echo "  cryptopaper set [coin] [days]"
-    echo "  cryptopaper run [coin] [days] [update-time]"
+    echo "  cryptopaper"
+    echo "  cryptopaper [days] [update-time]"
+    echo "  cryptopaper price"
+    echo "  cryptopaper set [days]"
+    echo "  cryptopaper range <days>"
+    echo "  cryptopaper interval <time>"
+    echo "  cryptopaper coin btc|eth|sol|doge|xmr|bnb|xrp"
     echo "  cryptopaper cur USD|EUR|GBP"
     echo "  cryptopaper info"
     echo "  cryptopaper cache"
     echo "  cryptopaper clear-cache"
+    echo
+    echo "Running 'cryptopaper' with no arguments starts automatic wallpaper updates."
+    echo "It uses your saved coin, currency, range, and update interval."
+    echo "You can also provide a range and interval directly; they will be saved."
+    echo "Example: cryptopaper 3d 45s"
+    echo "Press Ctrl+C to stop."
+    echo
+    echo "Commands:"
+    echo "  price        Show the current price for the active coin"
+    echo "  set          Generate and set the wallpaper once"
+    echo "  range        Set the persistent chart range"
+    echo "  interval     Set the persistent update interval"
+    echo "  coin         Set the persistent cryptocurrency"
+    echo "  cur          Set the persistent fiat currency"
+    echo "  info         Show detected system settings and active selections"
+    echo "  cache        Show cached API data"
+    echo "  clear-cache  Remove cached API data"
     echo
     echo "Supported coins:"
     echo "  btc   Bitcoin"
@@ -1785,32 +1902,20 @@ show_help() {
     echo "  EUR   Euro"
     echo "  GBP   British Pound"
     echo
-    echo "Commands:"
-    echo "  price        Show the current cryptocurrency price"
-    echo "  set          Generate and set the wallpaper once"
-    echo "  run          Keep the wallpaper automatically updated"
-    echo "  cur          Set the persistent fiat currency"
-    echo "  info         Show detected resolution, backend, and currency"
-    echo "  cache        Show cached API data"
-    echo "  clear-cache  Remove cached API data"
-    echo
     echo "Examples:"
-    echo "  cryptopaper price"
-    echo "  cryptopaper price eth"
-    echo "  cryptopaper set"
-    echo "  cryptopaper set eth"
-    echo "  cryptopaper set sol 7d"
-    echo "  cryptopaper run doge 30d 5m"
+    echo "  cryptopaper coin eth"
     echo "  cryptopaper cur EUR"
-    echo "  cryptopaper cur GBP"
-    echo "  cryptopaper cur USD"
+    echo "  cryptopaper range 3d"
+    echo "  cryptopaper interval 45s"
+    echo "  cryptopaper"
+    echo "  cryptopaper 3d"
+    echo "  cryptopaper 3d 45s"
+    echo "  cryptopaper price"
+    echo "  cryptopaper set"
+    echo "  cryptopaper set 7d"
     echo "  cryptopaper info"
     echo "  cryptopaper cache"
     echo "  cryptopaper clear-cache"
-    echo
-    echo "Old Bitcoin-only syntax still works:"
-    echo "  cryptopaper set 7d"
-    echo "  cryptopaper run 7d 5m"
     echo
     echo "Time range:"
     echo "  1d, 7d, 16d, 30d, etc."
@@ -1820,7 +1925,7 @@ show_help() {
     echo "  m = minutes"
     echo "  h = hours"
     echo
-    echo "Defaults:"
+    echo "Defaults on a fresh install:"
     echo "  Coin: btc"
     echo "  Currency: USD"
     echo "  Range: 1d"
@@ -1828,16 +1933,16 @@ show_help() {
     echo "  Screen resolution: automatically detected"
     echo "  Wallpaper backend: automatically detected"
     echo
-    echo "Press Ctrl+C to stop the run command."
+    echo "The selected coin, currency, range, and interval are saved in:"
+    echo "  $CONFIG_FILE"
 }
 
-
-load_currency
+load_config
 parse_cli_args "$@"
 validate_args "$@"
 
 case "$COMMAND" in
-    help|--help|-h|cur|clear-cache)
+    help|--help|-h|coin|cur|range|interval|clear-cache)
         ;;
     *)
         check_dependencies || exit 1
@@ -1845,6 +1950,10 @@ case "$COMMAND" in
 esac
 
 case "$COMMAND" in
+    __run__)
+        run_wallpaper
+        ;;
+
     price)
         show_price
         ;;
@@ -1853,8 +1962,16 @@ case "$COMMAND" in
         set_wallpaper
         ;;
 
-    run)
-        run_wallpaper
+    range)
+        set_saved_range "${2:-}"
+        ;;
+
+    interval)
+        set_saved_interval "${2:-}"
+        ;;
+
+    coin)
+        set_active_coin "${2:-}"
         ;;
 
     cur)
