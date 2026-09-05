@@ -1320,6 +1320,17 @@ cryptopaper/
 
 ## License
 
-This project is released into the public domain under The Unlicense.
+This project is distributed under the GNU General Public License, version 3 only
+(`GPL-3.0-only`). See [LICENSE](LICENSE) for the complete terms.
+
+You may use, modify, and sell the software. If you distribute a modified version
+covered by GPLv3, you must license that covered work under GPLv3 and provide the
+corresponding source code as required by the license. Private modifications do
+not have to be published.
+
+Earlier releases were made available under The Unlicense. This change does not
+revoke those permissions or restore copyright in code already dedicated to the
+public domain. GPLv3 can protect future copyrightable additions; it cannot
+retroactively impose copyleft on the previously public-domain code.
 
 See the [LICENSE](LICENSE) file for details.

@@ -7,11 +7,39 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, GLib, Gio
 
 import json
+import math
+import queue
 import os
+import shutil
 import signal
 import subprocess
 import threading
 from pathlib import Path
+
+
+def resolve_cli_path():
+    """Find the CLI independently of a desktop launcher's shell PATH."""
+    sibling = Path(__file__).resolve().with_name("cryptopaper")
+    if sibling.is_file():
+        if not os.access(sibling, os.X_OK):
+            raise RuntimeError(
+                f"The CLI is not executable: {sibling}. "
+                "Run chmod +x cryptopaper in the project folder."
+            )
+        return str(sibling)
+
+    installed = shutil.which("cryptopaper")
+    if installed:
+        return installed
+
+    local_bin = Path.home() / ".local" / "bin" / "cryptopaper"
+    if local_bin.is_file() and os.access(local_bin, os.X_OK):
+        return str(local_bin)
+
+    raise RuntimeError(
+        "Could not find the cryptopaper CLI. Put the executable cryptopaper "
+        "script in the same folder as cryptopaper-gui.py."
+    )
 
 
 # ---------------------------------------------------------
@@ -19,18 +47,14 @@ from pathlib import Path
 # ---------------------------------------------------------
 
 CONFIG_FILE = (
-    Path.home()
-    / ".config"
-    / "cryptopaper"
-    / "config"
+    Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    / "cryptopaper" / "config"
 )
 
 CACHE_DIR = (
-    Path.home()
-    / ".cache"
+    Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
     / "cryptopaper"
 )
-
 
 # ---------------------------------------------------------
 # cryptopaper settings
@@ -165,6 +189,8 @@ STATUS_NOTIFIER_XML = """
       type="s"
       access="read"/>
 
+    <property name="IconPixmap" type="a(iiay)" access="read"/>
+
     <property
       name="OverlayIconName"
       type="s"
@@ -209,6 +235,7 @@ class StatusNotifierItem:
         self.registered_with_watcher = False
 
         self.running = False
+        self.icon_pixmaps = self.load_icon_pixmaps()
 
         self.object_path = "/StatusNotifierItem"
 
@@ -228,6 +255,37 @@ class StatusNotifierItem:
         )
 
         self.setup()
+
+    @staticmethod
+    def load_icon_pixmaps():
+        """Send bundled artwork to the tray without requiring icon installation."""
+        icon_path = Path(__file__).resolve().parent / "assets" / "icon.png"
+        try:
+            gi.require_version("GdkPixbuf", "2.0")
+            from gi.repository import GdkPixbuf
+
+            pixmaps = []
+            for size in (16, 22, 32, 48, 64):
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                    str(icon_path), size, size, True
+                )
+                width, height = pixbuf.get_width(), pixbuf.get_height()
+                stride = pixbuf.get_rowstride()
+                channels = pixbuf.get_n_channels()
+                pixels = pixbuf.get_pixels()
+                argb = bytearray()
+                for y in range(height):
+                    for x in range(width):
+                        offset = y * stride + x * channels
+                        red, green, blue = pixels[offset:offset + 3]
+                        alpha = pixels[offset + 3] if pixbuf.get_has_alpha() else 255
+                        argb.extend((alpha, red, green, blue))
+                # StatusNotifierItem requires ARGB bytes in network byte order.
+                pixmaps.append((width, height, bytes(argb)))
+            return pixmaps
+        except (ImportError, ValueError, OSError, GLib.Error) as error:
+            print(f"Could not load tray icon {icon_path}: {error}")
+            return []
 
     def setup(self):
         try:
@@ -420,10 +478,11 @@ class StatusNotifierItem:
             )
 
         if property_name == "IconName":
-            return GLib.Variant(
-                "s",
-                "cryptopaper",
-            )
+            # An empty name tells the host to use the supplied pixmaps.
+            return GLib.Variant("s", "" if self.icon_pixmaps else "cryptopaper")
+
+        if property_name == "IconPixmap":
+            return GLib.Variant("a(iiay)", self.icon_pixmaps)
 
         if property_name == "OverlayIconName":
             return GLib.Variant(
@@ -550,6 +609,8 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
         )
 
         self.auto_process = None
+        self.work_queue = queue.Queue()
+        threading.Thread(target=self._run_jobs, daemon=True).start()
 
         self.stopping_auto = False
         self.stopped_for_settings_change = False
@@ -951,7 +1012,7 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
         try:
             result = subprocess.run(
                 [
-                    "cryptopaper",
+                    resolve_cli_path(),
                     *args,
                 ],
                 capture_output=True,
@@ -960,8 +1021,8 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
 
         except FileNotFoundError:
             raise RuntimeError(
-                "The cryptopaper command "
-                "was not found in PATH."
+                "Could not start the cryptopaper CLI. Check that the script "
+                "still exists and that its Bash interpreter is installed."
             )
 
         if result.returncode != 0:
@@ -1002,10 +1063,16 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
                         str(error),
                     )
 
-        threading.Thread(
-            target=worker,
-            daemon=True,
-        ).start()
+        self.work_queue.put(worker)
+
+    def _run_jobs(self):
+        # Preserve submission order and prevent concurrent CLI config writes.
+        while True:
+            worker = self.work_queue.get()
+            try:
+                worker()
+            finally:
+                self.work_queue.task_done()
 
     def _finish_success(
         self,
@@ -1029,7 +1096,7 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
     # Config
     # -----------------------------------------------------
 
-    def load_config(self):
+    def load_config(self, normalize=True):
         settings = {
             "coin": DEFAULT_COIN,
             "currency": DEFAULT_CURRENCY,
@@ -1068,6 +1135,9 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
 
             except OSError:
                 pass
+
+        if not normalize:
+            return settings
 
         if (
             settings["coin"]
@@ -1330,6 +1400,9 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
         if not coin_id:
             return None
 
+        if not isinstance(data, dict):
+            return None
+
         coin_data = data.get(
             coin_id
         )
@@ -1344,10 +1417,14 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
             currency.lower()
         )
 
-        if not isinstance(
-            price,
-            (int, float),
-        ):
+        if (isinstance(price, bool)
+                or not isinstance(price, (int, float))):
+            return None
+        try:
+            price = float(price)
+        except OverflowError:
+            return None
+        if not math.isfinite(price) or price < 0:
             return None
 
         return self.format_price(
@@ -1368,15 +1445,13 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
 
             self.last_cache_signature = None
 
-        if not cache_path.exists():
-            return True
-
         try:
             stat = cache_path.stat()
 
             signature = (
                 stat.st_mtime_ns,
                 stat.st_size,
+                stat.st_ino,
             )
 
         except OSError:
@@ -1413,33 +1488,11 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
         self,
         settings,
     ):
-        self.run_command(
-            [
-                "coin",
-                settings["coin"],
-            ]
-        )
-
-        self.run_command(
-            [
-                "cur",
-                settings["currency"],
-            ]
-        )
-
-        self.run_command(
-            [
-                "range",
-                settings["range"],
-            ]
-        )
-
-        self.run_command(
-            [
-                "interval",
-                settings["interval"],
-            ]
-        )
+        saved = self.load_config(normalize=False)
+        for key, command in (("coin", "coin"), ("currency", "cur"),
+                             ("range", "range"), ("interval", "interval")):
+            if saved[key] != settings[key]:
+                self.run_command([command, settings[key]])
 
     def auto_is_running(self):
         return (
@@ -1740,7 +1793,7 @@ class CryptoPaperWindow(Gtk.ApplicationWindow):
 
             self.auto_process = (
                 subprocess.Popen(
-                    ["cryptopaper"],
+                    [resolve_cli_path()],
                     stdout=(
                         subprocess.DEVNULL
                     ),
